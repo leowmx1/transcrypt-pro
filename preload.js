@@ -3,6 +3,7 @@ const { contextBridge, ipcRenderer, webUtils } = require('electron');
 contextBridge.exposeInMainWorld('electronAPI', {
     selectFile: (category) => 
         ipcRenderer.invoke('select-file', { category }),
+    selectPath: (properties) => ipcRenderer.invoke('select-path', properties),
     convertFile: (filePath, targetFormat, category, options) => 
         ipcRenderer.invoke('convert-file', { filePath, targetFormat, category, options }),
     handleDroppedFile: (arrayBuffer, fileName) => ipcRenderer.invoke('handle-dropped-file', arrayBuffer, fileName),
@@ -20,4 +21,6 @@ contextBridge.exposeInMainWorld('electronAPI', {
     saveSettings: (settings) => ipcRenderer.invoke('save-settings', settings),
     loadSettings: () => ipcRenderer.invoke('load-settings'),
     onProgress: (callback) => ipcRenderer.on('conversion-progress', (_event, value) => callback(value)),
+    encryptFile: (options) => ipcRenderer.invoke('encrypt-file', options),
+    decryptFile: (options) => ipcRenderer.invoke('decrypt-file', options),
 });

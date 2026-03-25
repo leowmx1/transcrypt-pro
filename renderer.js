@@ -134,6 +134,7 @@ const categoryNameMap = {
     'videos': '视频',
     'audio': '音频',
     'documents': '文档',
+    'encryption': '文件加密',
     'settings': '设置'
 };
 
@@ -561,10 +562,173 @@ document.addEventListener('DOMContentLoaded', () => {
         });
     }
 
+    function loadEncryption() {
+        mainContent.innerHTML = `
+            <h1><i class="bi bi-shield-lock"></i> 文件加密/解密</h1>
+            <div class="operation-container">
+                <div class="form-group">
+                    <label><i class="bi bi-file-earmark-zip"></i> 选择文件或文件夹:</label>
+                    <div id="encDropZone" class="drop-zone">
+                        <div class="drop-zone-content">
+                            <div class="drop-zone-icon"><i class="bi bi-file-arrow-down"></i></div>
+                            <div class="drop-zone-text">点击选择或拖拽文件/文件夹到此</div>
+                            <span id="encSelectedFileName" class="selected-file-name"></span>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="form-group">
+                    <label for="encAlgorithm"><i class="bi bi-shield-shaded"></i> 加密算法:</label>
+                    <select id="encAlgorithm">
+                        <option value="aes-256-gcm">AES-256-GCM (推荐)</option>
+                        <option value="chacha20-poly1305">ChaCha20-Poly1305</option>
+                    </select>
+                </div>
+
+                <div class="form-group">
+                    <label><i class="bi bi-key"></i> 密钥选项:</label>
+                    <div class="radio-group">
+                        <label><input type="radio" name="keyOption" value="file" checked> 使用密钥文件</label>
+                        <label><input type="radio" name="keyOption" value="generate"> 随机生成密钥</label>
+                    </div>
+                </div>
+
+                <div id="keyFileGroup">
+                    <div class="form-group">
+                        <label for="keyFilePath"><i class="bi bi-file-earmark-lock"></i> 选择密钥文件:</label>
+                        <div class="file-input-container">
+                            <input type="text" id="keyFilePath" placeholder="点击选择密钥文件" readonly>
+                            <button id="selectKeyFileBtn">选择</button>
+                        </div>
+                        <div class="setting-description">任何文件都可以作为密钥文件，内容将被安全地派生为加密密钥。</div>
+                    </div>
+                </div>
+
+                <div id="generateKeyGroup" style="display: none;">
+                    <div class="form-group">
+                       <label><input type="checkbox" id="saveKeyFile"> 保存生成的密钥文件</label>
+                       <div class="setting-description">建议保存密钥文件以便未来解密。</div>
+                    </div>
+                </div>
+
+                <button id="startEncryption"><i class="bi bi-play-circle"></i> 开始加密</button>
+                <button id="startDecryption" style="margin-left: 10px;"><i class="bi bi-unlock"></i> 开始解密</button>
+            </div>
+        `;
+
+        // --- 绑定事件 ---
+        const keyOptionRadios = document.querySelectorAll('input[name="keyOption"]');
+        const keyFileGroup = document.getElementById('keyFileGroup');
+        const generateKeyGroup = document.getElementById('generateKeyGroup');
+
+        let encFilePath = null;
+
+        keyOptionRadios.forEach(radio => {
+            radio.addEventListener('change', () => {
+                if (radio.value === 'file') {
+                    keyFileGroup.style.display = 'block';
+                    generateKeyGroup.style.display = 'none';
+                } else {
+                    keyFileGroup.style.display = 'none';
+                    generateKeyGroup.style.display = 'block';
+                }
+            });
+        });
+
+        const encDropZone = document.getElementById('encDropZone');
+        const encSelectedFileName = document.getElementById('encSelectedFileName');
+
+        encDropZone.addEventListener('click', async () => {
+            const result = await window.electronAPI.selectPath(['openFile', 'openDirectory']);
+            if (result.success) {
+                encFilePath = result.filePath;
+                encSelectedFileName.textContent = `✓ 已选择: ${result.fileName}`;
+            }
+        });
+
+        const selectKeyFileBtn = document.getElementById('selectKeyFileBtn');
+        const keyFilePathInput = document.getElementById('keyFilePath');
+
+        selectKeyFileBtn.addEventListener('click', async () => {
+            const result = await window.electronAPI.selectPath(['openFile']);
+            if (result.success) {
+                keyFilePathInput.value = result.filePath;
+            }
+        });
+
+        const startEncryptionBtn = document.getElementById('startEncryption');
+        startEncryptionBtn.addEventListener('click', async () => {
+            if (!encFilePath) {
+                showToast('请先选择要加密的文件或文件夹', 'error');
+                return;
+            }
+
+            const algorithm = document.getElementById('encAlgorithm').value;
+            const keyOption = document.querySelector('input[name="keyOption"]:checked').value;
+            const keyFilePath = keyFilePathInput.value;
+            const saveKeyFile = document.getElementById('saveKeyFile').checked;
+
+            if (keyOption === 'file' && !keyFilePath) {
+                showToast('请选择密钥文件', 'error');
+                return;
+            }
+
+            showToast('正在加密...', 'info');
+            const result = await window.electronAPI.encryptFile({ 
+                filePath: encFilePath, 
+                algorithm, 
+                keyOption, 
+                keyFilePath, 
+                saveKeyFile 
+            });
+
+            if (result.success) {
+                showToast(`加密成功！文件保存在: ${result.outputPath}`, 'success');
+            } else {
+                showToast(`加密失败: ${result.message}`, 'error');
+            }
+        });
+
+        const startDecryptionBtn = document.getElementById('startDecryption');
+        startDecryptionBtn.addEventListener('click', async () => {
+            if (!encFilePath) {
+                showToast('请先选择要解密的文件', 'error');
+                return;
+            }
+
+            const algorithm = document.getElementById('encAlgorithm').value;
+            const keyOption = document.querySelector('input[name="keyOption"]:checked').value;
+            const keyFilePath = keyFilePathInput.value;
+
+            if (keyOption === 'file' && !keyFilePath) {
+                showToast('请选择密钥文件', 'error');
+                return;
+            }
+            
+            showToast('正在解密...', 'info');
+            const result = await window.electronAPI.decryptFile({ 
+                filePath: encFilePath, 
+                algorithm, 
+                keyOption, 
+                keyFilePath 
+            });
+
+            if (result.success) {
+                showToast(`解密成功！文件保存在: ${result.outputPath}`, 'success');
+            } else {
+                showToast(`解密失败: ${result.message}`, 'error');
+            }
+        });
+    }
+
     // 加载内容到主容器
     function loadContent(category) {
         if (category === 'settings') {
             loadSettings();
+            return;
+        }
+        if (category === 'encryption') {
+            loadEncryption();
             return;
         }
         //selectedFilePath = null; // 重置文件选择
