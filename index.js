@@ -407,55 +407,63 @@ ipcMain.handle('decrypt-file', async (event, { filePath, algorithm, keyOption, k
         if (saveResult.canceled) return { success: false, message: '解密文件保存已取消' };
         const outputPath = saveResult.filePath;
 
-        const readStream = fs.createReadStream(filePath);
-        const iv = readStream.read(IV_LENGTH);
-        const authTag = fs.readFileSync(filePath).slice(-AUTH_TAG_LENGTH);
+        const fileBuffer = fs.readFileSync(filePath); // Read the entire file into a buffer
+        const iv = fileBuffer.slice(0, IV_LENGTH);
+        const authTag = fileBuffer.slice(fileBuffer.length - AUTH_TAG_LENGTH);
+        const encryptedDataBuffer = fileBuffer.slice(IV_LENGTH, fileBuffer.length - AUTH_TAG_LENGTH);
 
         const decipher = crypto.createDecipheriv(algorithm, key, iv, { authTagLength: AUTH_TAG_LENGTH });
         decipher.setAuthTag(authTag);
 
-        const encryptedData = fs.createReadStream(filePath, { start: IV_LENGTH, end: fs.statSync(filePath).size - AUTH_TAG_LENGTH -1 });
-
         if (isDirectory) {
-            // We need to write to a temporary zip file first, then extract
             const tempZipPath = path.join(os.tmpdir(), `${Date.now()}.zip`);
             const writeStream = fs.createWriteStream(tempZipPath);
 
             await new Promise((resolve, reject) => {
-                encryptedData.pipe(decipher).pipe(writeStream)
+                const bufferStream = new stream.PassThrough();
+                bufferStream.end(encryptedDataBuffer);
+                bufferStream.pipe(decipher).pipe(writeStream)
                     .on('finish', resolve)
                     .on('error', reject);
             });
 
             await fsp.mkdir(outputPath, { recursive: true });
-            yauzl.open(tempZipPath, { lazyEntries: true }, (err, zipfile) => {
-                if (err) throw err;
-                zipfile.readEntry();
-                zipfile.on('entry', (entry) => {
-                    const entryPath = path.join(outputPath, entry.fileName);
-                    if (/\/$/.test(entry.fileName)) {
-                        fsp.mkdir(entryPath, { recursive: true }).then(() => zipfile.readEntry());
-                    } else {
-                        zipfile.openReadStream(entry, (err, readStream) => {
-                            if (err) throw err;
-                            const writeStream = fs.createWriteStream(entryPath);
-                            readStream.pipe(writeStream).on('finish', () => zipfile.readEntry());
-                        });
-                    }
+            await new Promise((resolve, reject) => {
+                yauzl.open(tempZipPath, { lazyEntries: true }, (err, zipfile) => {
+                    if (err) return reject(err);
+                    zipfile.on('entry', (entry) => {
+                        const entryPath = path.join(outputPath, entry.fileName);
+                        if (/\//.test(entry.fileName)) {
+                            fsp.mkdir(entryPath, { recursive: true }).then(() => zipfile.readEntry()).catch(reject);
+                        } else {
+                            zipfile.openReadStream(entry, (err, readStream) => {
+                                if (err) return reject(err);
+                                const writeStream = fs.createWriteStream(entryPath);
+                                readStream.pipe(writeStream)
+                                    .on('finish', () => zipfile.readEntry())
+                                    .on('error', reject);
+                            });
+                        }
+                    });
+                    zipfile.on('end', () => {
+                        fsp.unlink(tempZipPath).then(resolve).catch(reject);
+                    });
+                    zipfile.readEntry();
                 });
             });
-            await fsp.unlink(tempZipPath);
 
         } else {
             const writeStream = fs.createWriteStream(outputPath);
-            encryptedData.pipe(decipher).pipe(writeStream);
+            const bufferStream = new stream.PassThrough();
+            bufferStream.end(encryptedDataBuffer);
+            await new Promise((resolve, reject) => {
+                bufferStream.pipe(decipher).pipe(writeStream)
+                    .on('finish', resolve)
+                    .on('error', reject);
+            });
         }
 
-        return new Promise((resolve, reject) => {
-            // This is tricky because the finish event is on the writeStream, which is nested for directories
-            // For now, we resolve immediately for simplicity, but a more robust solution would be better.
-            setTimeout(() => resolve({ success: true, outputPath }), 1000); // Give some time for operations to complete
-        });
+        return { success: true, outputPath };
 
     } catch (error) {
         return { success: false, message: error.message };
