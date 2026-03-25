@@ -909,6 +909,98 @@ select:disabled {
     animation: progressShine 1.5s infinite;
 }
 
+/* Encryption View Specifics */
+.radio-group {
+    display: flex;
+    gap: 20px;
+    background-color: var(--input-bg);
+    padding: 12px;
+    border-radius: var(--radius-md);
+    border: 1px solid var(--border-color);
+}
+
+.radio-group label {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-weight: 500;
+    cursor: pointer;
+}
+
+.file-input-container {
+    display: flex;
+    gap: 10px;
+}
+
+.file-input-container input {
+    flex: 1;
+    padding: 12px 16px;
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius-md);
+    font-size: 14px;
+    background-color: var(--input-bg);
+    color: var(--text-main);
+    cursor: not-allowed;
+}
+
+.file-input-container button,
+.secondary-btn {
+    padding: 12px 24px;
+    background-color: var(--surface-color);
+    color: var(--text-main);
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius-md);
+    font-size: 14px;
+    font-weight: 500;
+    cursor: pointer;
+    transition: all 0.2s;
+}
+
+.file-input-container button:hover,
+.secondary-btn:hover {
+    background-color: var(--bg-color);
+    border-color: var(--text-secondary);
+}
+
+#startEncryption,
+#startDecryption {
+    width: auto;
+    flex: 1;
+    padding: 14px;
+    background-color: var(--primary-color);
+    color: white;
+    border: none;
+    border-radius: var(--radius-md);
+    font-size: 16px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: all 0.2s;
+    margin-top: 16px;
+    box-shadow: var(--shadow-sm);
+}
+
+#startDecryption {
+    background-color: #4b5563; /* A neutral dark gray */
+}
+
+#startEncryption:hover {
+    background-color: var(--primary-hover);
+    transform: translateY(-1px);
+    box-shadow: var(--shadow-md);
+}
+
+#startDecryption:hover {
+    background-color: #374151;
+    transform: translateY(-1px);
+    box-shadow: var(--shadow-md);
+}
+
+.button-group {
+    display: flex;
+    gap: 10px;
+    margin-top: 16px;
+}
+
 @keyframes progressShine {
     from { transform: translateX(-100%); }
     to { transform: translateX(100%); }

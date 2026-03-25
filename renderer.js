@@ -571,10 +571,11 @@ document.addEventListener('DOMContentLoaded', () => {
                     <div id="encDropZone" class="drop-zone">
                         <div class="drop-zone-content">
                             <div class="drop-zone-icon"><i class="bi bi-file-arrow-down"></i></div>
-                            <div class="drop-zone-text">点击选择或拖拽文件/文件夹到此</div>
+                            <div class="drop-zone-text">点击选择文件 或 拖拽文件/文件夹到此</div>
                             <span id="encSelectedFileName" class="selected-file-name"></span>
                         </div>
                     </div>
+                    <button id="selectFolderBtn" class="secondary-btn" style="margin-top: 10px;"><i class="bi bi-folder2-open"></i> 选择文件夹</button>
                 </div>
 
                 <div class="form-group">
@@ -606,13 +607,14 @@ document.addEventListener('DOMContentLoaded', () => {
 
                 <div id="generateKeyGroup" style="display: none;">
                     <div class="form-group">
-                       <label><input type="checkbox" id="saveKeyFile"> 保存生成的密钥文件</label>
-                       <div class="setting-description">建议保存密钥文件以便未来解密。</div>
+                       <div class="setting-description">将随机生成一个密钥文件，请务必妥善保存它，否则文件将无法解密。</div>
                     </div>
                 </div>
 
-                <button id="startEncryption"><i class="bi bi-play-circle"></i> 开始加密</button>
-                <button id="startDecryption" style="margin-left: 10px;"><i class="bi bi-unlock"></i> 开始解密</button>
+                <div class="button-group">
+                    <button id="startEncryption"><i class="bi bi-play-circle"></i> 开始加密</button>
+                    <button id="startDecryption"><i class="bi bi-unlock"></i> 开始解密</button>
+                </div>
             </div>
         `;
 
@@ -639,10 +641,54 @@ document.addEventListener('DOMContentLoaded', () => {
         const encSelectedFileName = document.getElementById('encSelectedFileName');
 
         encDropZone.addEventListener('click', async () => {
-            const result = await window.electronAPI.selectPath(['openFile', 'openDirectory']);
+            const result = await window.electronAPI.selectPath(['openFile']);
             if (result.success) {
                 encFilePath = result.filePath;
                 encSelectedFileName.textContent = `✓ 已选择: ${result.fileName}`;
+            }
+        });
+
+        const selectFolderBtn = document.getElementById('selectFolderBtn');
+        selectFolderBtn.addEventListener('click', async () => {
+            const result = await window.electronAPI.selectPath(['openDirectory']);
+            if (result.success) {
+                encFilePath = result.filePath;
+                encSelectedFileName.textContent = `✓ 已选择: ${result.fileName}`;
+            }
+        });
+
+        // 拖拽事件处理
+        encDropZone.addEventListener('dragover', (e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            encDropZone.classList.add('dragover');
+        });
+
+        encDropZone.addEventListener('dragleave', (e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            encDropZone.classList.remove('dragover');
+        });
+
+        encDropZone.addEventListener('drop', async (e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            encDropZone.classList.remove('dragover');
+            
+            const files = e.dataTransfer.files;
+            if (files.length > 0) {
+                const file = files[0];
+                try {
+                    const filePath = window.electronAPI.getFilePath(file);
+                    if (filePath) {
+                        encFilePath = filePath;
+                        encSelectedFileName.textContent = `✓ 已选择: ${file.name}`;
+                    } else {
+                        showToast('无法获取文件路径', 'error');
+                    }
+                } catch (error) {
+                    showToast(`处理拖拽文件失败: ${error.message}`, 'error');
+                }
             }
         });
 
@@ -666,7 +712,6 @@ document.addEventListener('DOMContentLoaded', () => {
             const algorithm = document.getElementById('encAlgorithm').value;
             const keyOption = document.querySelector('input[name="keyOption"]:checked').value;
             const keyFilePath = keyFilePathInput.value;
-            const saveKeyFile = document.getElementById('saveKeyFile').checked;
 
             if (keyOption === 'file' && !keyFilePath) {
                 showToast('请选择密钥文件', 'error');
@@ -678,8 +723,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 filePath: encFilePath, 
                 algorithm, 
                 keyOption, 
-                keyFilePath, 
-                saveKeyFile 
+                keyFilePath
             });
 
             if (result.success) {

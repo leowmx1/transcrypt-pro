@@ -325,19 +325,17 @@ async function deriveKey(keyPath) {
     });
 }
 
-ipcMain.handle('encrypt-file', async (event, { filePath, algorithm, keyOption, keyFilePath, saveKeyFile }) => {
+ipcMain.handle('encrypt-file', async (event, { filePath, algorithm, keyOption, keyFilePath }) => {
     try {
         let key;
         if (keyOption === 'generate') {
             key = crypto.randomBytes(KEY_LENGTH);
-            if (saveKeyFile) {
-                const result = await dialog.showSaveDialog({
-                    title: '保存生成的密钥文件',
-                    defaultPath: path.join(app.getPath('downloads'), 'encryption.key')
-                });
-                if (result.canceled) return { success: false, message: '密钥文件保存已取消' };
-                await fsp.writeFile(result.filePath, key);
-            }
+            const result = await dialog.showSaveDialog({
+                title: '保存生成的密钥文件',
+                defaultPath: path.join(app.getPath('downloads'), 'encryption.key')
+            });
+            if (result.canceled) return { success: false, message: '密钥文件保存已取消' };
+            await fsp.writeFile(result.filePath, key);
         } else {
             if (!keyFilePath) throw new Error('未提供密钥文件');
             key = await deriveKey(keyFilePath);

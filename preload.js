@@ -22,5 +22,5 @@ contextBridge.exposeInMainWorld('electronAPI', {
     loadSettings: () => ipcRenderer.invoke('load-settings'),
     onProgress: (callback) => ipcRenderer.on('conversion-progress', (_event, value) => callback(value)),
     encryptFile: (options) => ipcRenderer.invoke('encrypt-file', options),
-    decryptFile: (options) => ipcRenderer.invoke('decrypt-file', options),
+    decryptFile: (options) => ipcRenderer.invoke('decrypt-file', options)
 });
