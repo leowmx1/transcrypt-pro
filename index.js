@@ -309,19 +309,30 @@ ipcMain.handle('get-image-dimensions', async (event, filePath) => {
 // ENCRYPTION / DECRYPTION
 // *********************************************************************************
 
-const SALT = 'a-hardcoded-salt-for-key-derivation'; // In a real app, this should be unique per file and stored with the file
-const KEY_LENGTH = 32; // 256 bits
-const IV_LENGTH = 12; // 96 bits for GCM
-const AUTH_TAG_LENGTH = 16; // GCM auth tag
+
 
 // Helper to derive a key from a file or password
 async function deriveKey(keyPath) {
     const keyMaterial = await fsp.readFile(keyPath);
     return new Promise((resolve, reject) => {
-        crypto.scrypt(keyMaterial, SALT, KEY_LENGTH, (err, derivedKey) => {
+        crypto.scrypt(keyMaterial, 'a-hardcoded-salt-for-key-derivation', 32, (err, derivedKey) => {
             if (err) reject(err);
             resolve(derivedKey);
         });
+    });
+}
+
+async function getDirectoryAsBuffer(dirPath) {
+    return new Promise((resolve, reject) => {
+        const archive = archiver('zip', { zlib: { level: 9 } });
+        const buffers = [];
+
+        archive.on('data', (data) => buffers.push(data));
+        archive.on('end', () => resolve(Buffer.concat(buffers)));
+        archive.on('error', (err) => reject(err));
+
+        archive.directory(dirPath, false);
+        archive.finalize();
     });
 }
 
@@ -329,7 +340,7 @@ ipcMain.handle('encrypt-file', async (event, { filePath, algorithm, keyOption, k
     try {
         let key;
         if (keyOption === 'generate') {
-            key = crypto.randomBytes(KEY_LENGTH);
+            key = crypto.randomBytes(32);
             const result = await dialog.showSaveDialog({
                 title: '保存生成的密钥文件',
                 defaultPath: path.join(app.getPath('downloads'), 'encryption.key')
@@ -355,8 +366,8 @@ ipcMain.handle('encrypt-file', async (event, { filePath, algorithm, keyOption, k
         if (saveResult.canceled) return { success: false, message: '加密文件保存已取消' };
         const outputPath = saveResult.filePath;
 
-        const iv = crypto.randomBytes(IV_LENGTH);
-        const cipher = crypto.createCipheriv(algorithm, key, iv, { authTagLength: AUTH_TAG_LENGTH });
+        const iv = crypto.randomBytes(12);
+        const cipher = crypto.createCipheriv('aes-256-gcm', key, iv, { authTagLength: 16 });
 
         const writeStream = fs.createWriteStream(outputPath);
         writeStream.write(iv);
@@ -371,11 +382,11 @@ ipcMain.handle('encrypt-file', async (event, { filePath, algorithm, keyOption, k
             readStream.pipe(cipher).pipe(writeStream);
         }
 
-        return new Promise((resolve, reject) => {
+        await new Promise((resolve, reject) => {
             writeStream.on('finish', () => {
                 const authTag = cipher.getAuthTag();
                 fs.appendFileSync(outputPath, authTag);
-                resolve({ success: true, outputPath });
+                resolve();
             });
             writeStream.on('error', reject);
         });
@@ -389,7 +400,6 @@ ipcMain.handle('decrypt-file', async (event, { filePath, algorithm, keyOption, k
     try {
         let key;
         if (keyOption === 'generate') {
-            // This should not happen in decryption context, but as a fallback
             throw new Error('解密时不能生成新密钥');
         } else {
             if (!keyFilePath) throw new Error('未提供密钥文件');
@@ -412,7 +422,7 @@ ipcMain.handle('decrypt-file', async (event, { filePath, algorithm, keyOption, k
         const authTag = fileBuffer.slice(fileBuffer.length - AUTH_TAG_LENGTH);
         const encryptedDataBuffer = fileBuffer.slice(IV_LENGTH, fileBuffer.length - AUTH_TAG_LENGTH);
 
-        const decipher = crypto.createDecipheriv(algorithm, key, iv, { authTagLength: AUTH_TAG_LENGTH });
+        const decipher = crypto.createDecipheriv('aes-256-gcm', key, iv, { authTagLength: AUTH_TAG_LENGTH });
         decipher.setAuthTag(authTag);
 
         if (isDirectory) {
@@ -433,9 +443,9 @@ ipcMain.handle('decrypt-file', async (event, { filePath, algorithm, keyOption, k
                     if (err) return reject(err);
                     zipfile.on('entry', (entry) => {
                         const entryPath = path.join(outputPath, entry.fileName);
-                        if (/\//.test(entry.fileName)) {
+                        if (/\/$/.test(entry.fileName)) { // Directory
                             fsp.mkdir(entryPath, { recursive: true }).then(() => zipfile.readEntry()).catch(reject);
-                        } else {
+                        } else { // File
                             zipfile.openReadStream(entry, (err, readStream) => {
                                 if (err) return reject(err);
                                 const writeStream = fs.createWriteStream(entryPath);

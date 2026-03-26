@@ -583,7 +583,6 @@ document.addEventListener('DOMContentLoaded', () => {
                     <label for="encAlgorithm"><i class="bi bi-shield-shaded"></i> 加密算法:</label>
                     <select id="encAlgorithm">
                         <option value="aes-256-gcm">AES-256-GCM (推荐)</option>
-                        <option value="chacha20-poly1305">ChaCha20-Poly1305</option>
                     </select>
                 </div>
 
@@ -638,7 +637,6 @@ document.addEventListener('DOMContentLoaded', () => {
                     <label for="decAlgorithm"><i class="bi bi-shield-shaded"></i> 加密算法:</label>
                     <select id="decAlgorithm">
                         <option value="aes-256-gcm">AES-256-GCM (推荐)</option>
-                        <option value="chacha20-poly1305">ChaCha20-Poly1305</option>
                     </select>
                 </div>
 
