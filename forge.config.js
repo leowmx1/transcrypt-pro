@@ -7,7 +7,7 @@ module.exports = {
       unpackDir: "node_modules/{ffmpeg-static,ffprobe-static}"
     },
     icon: '.\\assets\\app-icon',
-    name: 'AI Disk Manager'
+    name: 'TransCrypt Pro'
   },
   rebuildConfig: {},
   makers: [
@@ -16,7 +16,7 @@ module.exports = {
       config: {
         language: 2052, // 中文(简体)的 locale ID
         manufacturer: 'leowmx', // 会显示在安装程序中
-        description: 'All-in-one format transformer application.', // 应用描述
+        description: 'A powerful file format transformer and encryption tool built with Electron.', // 应用描述
         icon: '.\\assets\\app-icon.ico',
         ui: {
            chooseDirectory: true // 是否允许用户选择安装目录
