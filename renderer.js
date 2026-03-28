@@ -584,7 +584,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
     function loadEncryptionView() {
         mainContent.innerHTML = `
-            <h1><i class="bi bi-shield-lock"></i> 文件加密</h1>
+            <h1><i class="bi bi-lock"></i> 文件加密</h1>
             <div class="operation-container">
                 <div class="form-group">
                     <label><i class="bi bi-file-earmark-zip"></i> 选择文件或文件夹:</label>
@@ -660,7 +660,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
     function loadDecryptionView() {
         mainContent.innerHTML = `
-            <h1><i class="bi bi-shield-unlock"></i> 文件解密</h1>
+            <h1><i class="bi bi-unlock"></i> 文件解密</h1>
             <div class="operation-container">
                 <div class="form-group">
                     <label><i class="bi bi-file-earmark-zip"></i> 选择要解密的 .enc 或 .dir.enc 文件:</label>
