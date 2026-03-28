@@ -1288,6 +1288,9 @@ document.addEventListener('DOMContentLoaded', () => {
         if (typeof file === 'string') {
             return file;
         }
+        if (file && typeof file === 'object' && typeof file.filePath === 'string' && file.filePath) {
+            return file.filePath;
+        }
         return window.electronAPI.getFilePath(file);
     }
 
@@ -1311,8 +1314,8 @@ document.addEventListener('DOMContentLoaded', () => {
         for (const item of inputItems) {
             const isFileLike = typeof item === 'object' && item !== null;
             const sourcePath = normalizeImageFilePath(item);
-            const sourceName = isFileLike ? item.name : sourcePath.split(/[\\/]/).pop();
-            const sourceSize = isFileLike ? item.size : null;
+            const sourceName = isFileLike ? (item.name || item.fileName) : sourcePath.split(/[\\/]/).pop();
+            const sourceSize = isFileLike && Number.isFinite(item.size) ? item.size : null;
 
             if (!sourcePath) {
                 invalid.push({ name: sourceName || '未知文件', reason: '无法读取文件路径' });
