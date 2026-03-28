@@ -11,11 +11,17 @@ const crypto = require('crypto');
 const stream = require('stream');
 const archiver = require('archiver');
 const yauzl = require('yauzl');
+const { createBatchController, runWithConcurrency } = require('./batchConversion');
 
 const IV_LENGTH = 12; // 96 bits for GCM
 const AUTH_TAG_LENGTH = 16; // GCM auth tag
+const IMAGE_FILE_FILTERS = [
+    { name: '图片文件', extensions: ['jpg', 'jpeg', 'png', 'gif', 'bmp', 'webp'] },
+    { name: '所有文件', extensions: ['*'] }
+];
 
 const settingsPath = path.join(app.getPath('userData'), 'settings.json');
+const activeBatchControllers = new Map();
 
 // 封装获取二进制文件路径的函数
 function getBinaryPath(type) {
@@ -152,7 +158,8 @@ ipcMain.handle('select-file', async (event, { category }) => {
     try {
         const result = await dialog.showOpenDialog({
             title: '选择要转换的文件',
-            properties: ['openFile']
+            properties: ['openFile'],
+            filters: category === 'images' ? IMAGE_FILE_FILTERS : undefined
         });
         
         if (result.canceled || result.filePaths.length === 0) {
@@ -190,6 +197,57 @@ ipcMain.handle('select-path', async (event, properties) => {
     }
 });
 
+ipcMain.handle('select-image-files', async () => {
+    try {
+        const result = await dialog.showOpenDialog({
+            title: '选择要批量转换的图片',
+            properties: ['openFile', 'multiSelections'],
+            filters: IMAGE_FILE_FILTERS
+        });
+        if (result.canceled || result.filePaths.length === 0) {
+            return { success: false };
+        }
+        return {
+            success: true,
+            filePaths: result.filePaths,
+            fileNames: result.filePaths.map(filePath => path.basename(filePath)),
+            fileSizes: result.filePaths.map(filePath => {
+                try {
+                    return fs.statSync(filePath).size;
+                } catch (error) {
+                    return null;
+                }
+            })
+        };
+    } catch (error) {
+        return {
+            success: false,
+            message: `选择图片失败: ${error.message}`
+        };
+    }
+});
+
+ipcMain.handle('select-output-directory', async () => {
+    try {
+        const result = await dialog.showOpenDialog({
+            title: '选择输出文件夹',
+            properties: ['openDirectory', 'createDirectory']
+        });
+        if (result.canceled || result.filePaths.length === 0) {
+            return { success: false };
+        }
+        return {
+            success: true,
+            directoryPath: result.filePaths[0]
+        };
+    } catch (error) {
+        return {
+            success: false,
+            message: `选择输出文件夹失败: ${error.message}`
+        };
+    }
+});
+
 // 处理文件转换请求
 ipcMain.handle('convert-file', async (event, { filePath, targetFormat, category, options }) => {
     try {
@@ -212,54 +270,13 @@ ipcMain.handle('convert-file', async (event, { filePath, targetFormat, category,
         
         const outputPath = result.filePath;
         
-        // 使用 Worker 进行转换
-        return new Promise((resolve) => {
-            const worker = new Worker(path.join(__dirname, 'worker.js'));
-            
-            worker.on('message', (msg) => {
-                if (msg.type === 'progress') {
-                    // 发送进度给渲染进程
-                    event.sender.send('conversion-progress', msg.value);
-                } else if (msg.type === 'success') {
-                    resolve({ 
-                        success: true, 
-                        message: `文件已成功转换并保存至: ${msg.outputPath}`,
-                        outputPath: msg.outputPath,
-                        extra: msg.extra
-                    });
-                    worker.terminate();
-                } else if (msg.type === 'error') {
-                    resolve({ 
-                        success: false, 
-                        message: `转换失败: ${msg.message}` 
-                    });
-                    worker.terminate();
-                }
-            });
-
-            worker.on('error', (err) => {
-                resolve({ 
-                    success: false, 
-                    message: `Worker错误: ${err.message}` 
-                });
-                worker.terminate();
-            });
-
-            worker.on('exit', (code) => {
-                if (code !== 0) {
-                    console.error(`Worker stopped with exit code ${code}`);
-                }
-            });
-
-            // 启动任务
-            worker.postMessage({ 
-                filePath, 
-                outputPath, 
-                targetFormat, 
-                category, 
-                options,
-                ffmpegPath // 将解析到的 ffmpeg 路径传递给 worker
-            });
+        return await runWorkerConversion({
+            sender: event.sender,
+            filePath,
+            outputPath,
+            targetFormat,
+            category,
+            options
         });
 
     } catch (error) {
@@ -267,6 +284,147 @@ ipcMain.handle('convert-file', async (event, { filePath, targetFormat, category,
             success: false, 
             message: `转换初始化失败: ${error.message}` 
         };
+    }
+});
+
+ipcMain.handle('batch-convert-images', async (event, payload) => {
+    const { batchId, files, targetFormat, options, outputDirectory, concurrency = 3 } = payload || {};
+    if (!batchId) {
+        return { success: false, message: '缺少批次标识' };
+    }
+    if (!Array.isArray(files) || files.length === 0) {
+        return { success: false, message: '没有可转换的文件' };
+    }
+    if (!targetFormat) {
+        return { success: false, message: '缺少目标格式' };
+    }
+    if (!outputDirectory) {
+        return { success: false, message: '缺少输出目录' };
+    }
+
+    const controller = createBatchController();
+    activeBatchControllers.set(batchId, controller);
+    const total = files.length;
+    let completed = 0;
+
+    try {
+        const results = await runWithConcurrency(
+            files,
+            Math.max(1, Math.min(6, Number(concurrency) || 3)),
+            async (filePath) => {
+                if (controller.cancelled) {
+                    return { success: false, filePath, cancelled: true, message: '已取消' };
+                }
+
+                const baseName = path.basename(filePath, path.extname(filePath));
+                const ext = targetFormat.toLowerCase();
+                const outputPath = path.join(outputDirectory, `${baseName}.${ext}`);
+
+                event.sender.send('batch-conversion-progress', {
+                    batchId,
+                    type: 'file-start',
+                    filePath,
+                    fileName: path.basename(filePath),
+                    completed,
+                    total
+                });
+
+                const result = await runWorkerConversion({
+                    sender: event.sender,
+                    filePath,
+                    outputPath,
+                    targetFormat,
+                    category: 'images',
+                    options,
+                    controller,
+                    batchId
+                });
+
+                completed += 1;
+                const success = !!result.success;
+                event.sender.send('batch-conversion-progress', {
+                    batchId,
+                    type: 'file-complete',
+                    filePath,
+                    fileName: path.basename(filePath),
+                    outputPath: result.outputPath,
+                    success,
+                    message: result.message,
+                    completed,
+                    total,
+                    percent: Math.round((completed / total) * 100)
+                });
+
+                return {
+                    success,
+                    filePath,
+                    fileName: path.basename(filePath),
+                    outputPath: result.outputPath,
+                    message: result.message
+                };
+            },
+            () => controller.cancelled
+        );
+
+        const successful = results.filter(item => item && item.success);
+        const failed = results.filter(item => item && !item.success && !item.cancelled);
+        const cancelled = controller.cancelled;
+
+        return {
+            success: !cancelled,
+            cancelled,
+            total,
+            completed,
+            successful,
+            failed
+        };
+    } catch (error) {
+        return {
+            success: false,
+            message: error.message
+        };
+    } finally {
+        activeBatchControllers.delete(batchId);
+    }
+});
+
+ipcMain.handle('cancel-batch-conversion', async (event, { batchId }) => {
+    const controller = activeBatchControllers.get(batchId);
+    if (!controller) {
+        return { success: false, message: '未找到进行中的批次' };
+    }
+
+    controller.cancelled = true;
+    Array.from(controller.workers).forEach(worker => {
+        try {
+            worker.terminate();
+        } catch (error) {
+        }
+    });
+    controller.workers.clear();
+    return { success: true };
+});
+
+ipcMain.handle('create-batch-zip', async (event, { filePaths, suggestedName }) => {
+    if (!Array.isArray(filePaths) || filePaths.length === 0) {
+        return { success: false, message: '没有可打包的文件' };
+    }
+
+    try {
+        const result = await dialog.showSaveDialog({
+            title: '保存批量转换压缩包',
+            defaultPath: path.join(app.getPath('downloads'), `${suggestedName || 'image-batch-converted'}.zip`),
+            filters: [{ name: 'ZIP 文件', extensions: ['zip'] }]
+        });
+
+        if (result.canceled || !result.filePath) {
+            return { success: false, message: '打包已取消' };
+        }
+
+        await createZipFromFiles(filePaths, result.filePath);
+        return { success: true, zipPath: result.filePath };
+    } catch (error) {
+        return { success: false, message: `打包失败: ${error.message}` };
     }
 });
 
@@ -623,3 +781,86 @@ ipcMain.handle('load-settings', async () => {
         return null;
     }
 });
+
+async function runWorkerConversion({ sender, filePath, outputPath, targetFormat, category, options, controller, batchId }) {
+    return new Promise((resolve) => {
+        const worker = new Worker(path.join(__dirname, 'worker.js'));
+        if (controller) {
+            controller.workers.add(worker);
+        }
+
+        const complete = (result) => {
+            if (controller) {
+                controller.workers.delete(worker);
+            }
+            resolve(result);
+            worker.terminate();
+        };
+
+        worker.on('message', (msg) => {
+            if (msg.type === 'progress') {
+                if (batchId) {
+                    sender.send('batch-conversion-progress', {
+                        batchId,
+                        type: 'file-progress',
+                        filePath,
+                        progress: msg.value
+                    });
+                } else {
+                    sender.send('conversion-progress', msg.value);
+                }
+            } else if (msg.type === 'success') {
+                complete({
+                    success: true,
+                    message: `文件已成功转换并保存至: ${msg.outputPath}`,
+                    outputPath: msg.outputPath,
+                    extra: msg.extra
+                });
+            } else if (msg.type === 'error') {
+                complete({
+                    success: false,
+                    message: `转换失败: ${msg.message}`
+                });
+            }
+        });
+
+        worker.on('error', (err) => {
+            complete({
+                success: false,
+                message: `Worker错误: ${err.message}`
+            });
+        });
+
+        worker.on('exit', (code) => {
+            if (code !== 0 && !controller?.cancelled) {
+                console.error(`Worker stopped with exit code ${code}`);
+            }
+        });
+
+        worker.postMessage({
+            filePath,
+            outputPath,
+            targetFormat,
+            category,
+            options,
+            ffmpegPath
+        });
+    });
+}
+
+async function createZipFromFiles(filePaths, zipPath) {
+    await new Promise((resolve, reject) => {
+        const output = fs.createWriteStream(zipPath);
+        const archive = archiver('zip', { zlib: { level: 9 } });
+
+        output.on('close', resolve);
+        output.on('error', reject);
+        archive.on('error', reject);
+
+        archive.pipe(output);
+        filePaths.forEach(filePath => {
+            archive.file(filePath, { name: path.basename(filePath) });
+        });
+        archive.finalize();
+    });
+}

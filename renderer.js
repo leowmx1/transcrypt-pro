@@ -164,6 +164,9 @@ const formatCompatibilityMap = {
     'pdf': ['DOCX', 'DOC', 'ODT', 'RTF', 'TXT']
 };
 
+const imageExtensions = new Set(['jpg', 'jpeg', 'png', 'gif', 'bmp', 'webp']);
+const maxImageFileSizeBytes = 50 * 1024 * 1024;
+
 // 根据源文件更新目标格式列表
 function updateTargetFormats(category, sourceFilePath) {
     const targetSelect = document.getElementById('targetFormat');
@@ -343,6 +346,17 @@ document.addEventListener('DOMContentLoaded', () => {
     let currentCategory = null;
     let progressTimer = null;
     let currentProgress = 0;
+    let selectedImageFiles = [];
+    let imageBatchState = {
+        active: false,
+        batchId: null,
+        failed: [],
+        successful: [],
+        outputDirectory: null,
+        currentFileName: '',
+        completed: 0,
+        total: 0
+    };
 
     function updateProgressBar(value) {
         const progressBar = document.getElementById('progressBar');
@@ -384,6 +398,49 @@ document.addEventListener('DOMContentLoaded', () => {
         if (currentProgress >= 100 && progressTimer) {
             clearInterval(progressTimer);
             progressTimer = null;
+        }
+    });
+
+    window.electronAPI.onBatchProgress((payload) => {
+        if (!payload || !imageBatchState.active || payload.batchId !== imageBatchState.batchId) {
+            return;
+        }
+
+        if (payload.type === 'file-start') {
+            imageBatchState.currentFileName = payload.fileName || '';
+            updateBatchProgressUI({
+                percent: imageBatchState.total > 0 ? Math.round((imageBatchState.completed / imageBatchState.total) * 100) : 0,
+                completed: imageBatchState.completed,
+                total: imageBatchState.total,
+                currentFileName: imageBatchState.currentFileName,
+                failedCount: imageBatchState.failed.length
+            });
+        }
+
+        if (payload.type === 'file-complete') {
+            imageBatchState.completed = payload.completed || imageBatchState.completed;
+            imageBatchState.currentFileName = payload.fileName || imageBatchState.currentFileName;
+
+            if (payload.success) {
+                imageBatchState.successful.push({
+                    sourcePath: payload.filePath,
+                    outputPath: payload.outputPath
+                });
+            } else {
+                imageBatchState.failed.push({
+                    sourcePath: payload.filePath,
+                    fileName: payload.fileName,
+                    message: payload.message || '转换失败'
+                });
+            }
+
+            updateBatchProgressUI({
+                percent: payload.percent || 0,
+                completed: imageBatchState.completed,
+                total: imageBatchState.total,
+                currentFileName: imageBatchState.currentFileName,
+                failedCount: imageBatchState.failed.length
+            });
         }
     });
 
@@ -1227,6 +1284,266 @@ document.addEventListener('DOMContentLoaded', () => {
 
     }
 
+    function normalizeImageFilePath(file) {
+        if (typeof file === 'string') {
+            return file;
+        }
+        return window.electronAPI.getFilePath(file);
+    }
+
+    function getImageValidationResult(fileName, fileSize, filePath) {
+        const sourceName = fileName || (filePath ? filePath.split(/[\\/]/).pop() : '');
+        const ext = sourceName.includes('.') ? sourceName.split('.').pop().toLowerCase() : '';
+        if (!imageExtensions.has(ext)) {
+            return { valid: false, reason: '文件格式不支持' };
+        }
+        if (Number.isFinite(fileSize) && fileSize > maxImageFileSizeBytes) {
+            return { valid: false, reason: '文件过大（超过 50MB）' };
+        }
+        return { valid: true };
+    }
+
+    async function validateAndCollectImageFiles(inputItems) {
+        const valid = [];
+        const invalid = [];
+        const uniquePathMap = new Map();
+
+        for (const item of inputItems) {
+            const isFileLike = typeof item === 'object' && item !== null;
+            const sourcePath = normalizeImageFilePath(item);
+            const sourceName = isFileLike ? item.name : sourcePath.split(/[\\/]/).pop();
+            const sourceSize = isFileLike ? item.size : null;
+
+            if (!sourcePath) {
+                invalid.push({ name: sourceName || '未知文件', reason: '无法读取文件路径' });
+                continue;
+            }
+
+            const key = sourcePath.toLowerCase();
+            if (uniquePathMap.has(key)) {
+                continue;
+            }
+
+            const validation = getImageValidationResult(sourceName, sourceSize, sourcePath);
+            if (!validation.valid) {
+                invalid.push({ name: sourceName || '未知文件', reason: validation.reason });
+                continue;
+            }
+
+            uniquePathMap.set(key, {
+                filePath: sourcePath,
+                fileName: sourceName || sourcePath.split(/[\\/]/).pop()
+            });
+        }
+
+        valid.push(...uniquePathMap.values());
+        return { valid, invalid };
+    }
+
+    function renderImageSelectionUI() {
+        const selectedFileName = document.getElementById('selectedFileName');
+        const listContainer = document.getElementById('batchSelectedList');
+        if (!selectedFileName || !listContainer) return;
+
+        if (selectedImageFiles.length === 0) {
+            selectedFileName.textContent = '';
+            listContainer.style.display = 'none';
+            listContainer.innerHTML = '';
+            return;
+        }
+
+        selectedFileName.textContent = `✓ 已选择 ${selectedImageFiles.length} 个图片文件`;
+        const previewItems = selectedImageFiles.slice(0, 12).map(file => `
+            <div class="batch-selected-item">
+                <span class="batch-file-name">${file.fileName}</span>
+            </div>
+        `).join('');
+        const moreText = selectedImageFiles.length > 12 ? `<div class="batch-selected-more">... 另有 ${selectedImageFiles.length - 12} 个文件</div>` : '';
+
+        listContainer.innerHTML = `
+            <div class="batch-selected-header">待转换文件列表</div>
+            <div class="batch-selected-items">${previewItems}</div>
+            ${moreText}
+        `;
+        listContainer.style.display = 'block';
+    }
+
+    function updateBatchProgressUI({ percent, completed, total, currentFileName, failedCount = 0 }) {
+        const progressContainer = document.getElementById('progressContainer');
+        const progressBar = document.getElementById('progressBar');
+        const progressText = document.getElementById('progressText');
+        const progressStats = document.getElementById('batchProgressStats');
+        const progressCurrent = document.getElementById('batchCurrentFile');
+        if (!progressContainer || !progressBar || !progressText) return;
+
+        progressContainer.style.display = 'block';
+        progressBar.style.width = `${Math.max(0, Math.min(100, percent || 0))}%`;
+        progressText.textContent = `${Math.max(0, Math.min(100, percent || 0))}%`;
+
+        if (progressStats) {
+            progressStats.textContent = `${completed || 0}/${total || 0} 已完成，失败 ${failedCount}`;
+        }
+        if (progressCurrent) {
+            progressCurrent.textContent = currentFileName ? `当前处理: ${currentFileName}` : '等待开始...';
+        }
+    }
+
+    function renderBatchResult(container, summary) {
+        const successful = summary.successful || [];
+        const failed = summary.failed || [];
+        const successItems = successful.map(item => `<div class="meta-item"><i class="bi bi-check-circle"></i>${item.outputPath.split(/[\\/]/).pop()}</div>`).join('');
+        const failedItems = failed.map(item => `<div class="meta-item batch-failed-item"><i class="bi bi-x-circle"></i>${item.fileName || item.sourcePath.split(/[\\/]/).pop()} - ${item.message}</div>`).join('');
+
+        container.innerHTML = `
+            <div class="${failed.length > 0 ? 'conversion-error-card' : 'conversion-success-card'}">
+                <div class="${failed.length > 0 ? 'error-header' : 'success-header'}">
+                    <i class="bi ${failed.length > 0 ? 'bi-exclamation-circle-fill' : 'bi-check-circle-fill'}"></i>
+                    <span>批量转换完成</span>
+                </div>
+                <div class="result-info">
+                    <div class="meta-item"><span class="meta-label">成功:</span> ${successful.length}</div>
+                    <div class="meta-item"><span class="meta-label">失败:</span> ${failed.length}</div>
+                    <div class="meta-item"><span class="meta-label">总数:</span> ${summary.total || (successful.length + failed.length)}</div>
+                </div>
+                <div class="batch-result-list">
+                    ${successItems || '<div class="meta-item">暂无成功文件</div>'}
+                    ${failedItems}
+                </div>
+                <div class="result-actions batch-result-actions">
+                    <button id="batchDownloadZipBtn" class="secondary-btn"><i class="bi bi-file-earmark-zip"></i> 打包下载</button>
+                    <button id="batchOpenFolderBtn" class="secondary-btn"><i class="bi bi-folder2-open"></i> 逐个下载（打开目录）</button>
+                    ${failed.length > 0 ? '<button id="batchRetryFailedBtn" class="modal-btn modal-btn-primary"><i class="bi bi-arrow-repeat"></i> 重试失败文件</button>' : ''}
+                </div>
+            </div>
+        `;
+        container.style.display = 'block';
+
+        const zipBtn = document.getElementById('batchDownloadZipBtn');
+        const folderBtn = document.getElementById('batchOpenFolderBtn');
+        const retryBtn = document.getElementById('batchRetryFailedBtn');
+
+        if (zipBtn) {
+            zipBtn.onclick = async () => {
+                if (!successful.length) {
+                    showToast('没有可打包的成功文件', 'info');
+                    return;
+                }
+                const zipResult = await window.electronAPI.createBatchZip(successful.map(item => item.outputPath), `images-${Date.now()}`);
+                if (zipResult.success) {
+                    showToast(`已生成压缩包: ${zipResult.zipPath}`, 'success');
+                    if (Settings.get('openFolder', false)) {
+                        window.electronAPI.showItemInFolder(zipResult.zipPath);
+                    }
+                } else {
+                    showToast(`打包失败: ${zipResult.message}`, 'error');
+                }
+            };
+        }
+
+        if (folderBtn) {
+            folderBtn.onclick = () => {
+                if (imageBatchState.outputDirectory) {
+                    window.electronAPI.openPath(imageBatchState.outputDirectory);
+                }
+            };
+        }
+
+        if (retryBtn) {
+            retryBtn.onclick = async () => {
+                selectedImageFiles = failed.map(item => ({
+                    filePath: item.sourcePath,
+                    fileName: item.fileName || item.sourcePath.split(/[\\/]/).pop()
+                }));
+                imageBatchState.failed = [];
+                renderImageSelectionUI();
+                showToast(`已重新装载 ${selectedImageFiles.length} 个失败文件`, 'info');
+            };
+        }
+    }
+
+    async function startImageBatchConversion(category, targetFormat, options, startButton) {
+        if (selectedImageFiles.length === 0) {
+            showToast('请先选择至少一个图片文件', 'error');
+            return;
+        }
+
+        const outputResult = await window.electronAPI.selectOutputDirectory();
+        if (!outputResult.success || !outputResult.directoryPath) {
+            showToast('未选择输出目录，已取消转换', 'info');
+            return;
+        }
+
+        imageBatchState = {
+            active: true,
+            batchId: `batch_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
+            failed: [],
+            successful: [],
+            outputDirectory: outputResult.directoryPath,
+            currentFileName: '',
+            completed: 0,
+            total: selectedImageFiles.length
+        };
+
+        const progressActions = document.getElementById('batchProgressActions');
+        if (progressActions) {
+            progressActions.style.display = 'flex';
+        }
+
+        if (startButton) {
+            startButton.style.display = 'none';
+        }
+
+        updateBatchProgressUI({
+            percent: 0,
+            completed: 0,
+            total: selectedImageFiles.length,
+            currentFileName: '等待开始...',
+            failedCount: 0
+        });
+
+        showToast('批量转换已开始', 'info', 3500);
+        const batchResult = await window.electronAPI.batchConvertImages({
+            batchId: imageBatchState.batchId,
+            files: selectedImageFiles.map(item => item.filePath),
+            targetFormat,
+            category,
+            options,
+            outputDirectory: outputResult.directoryPath,
+            concurrency: 3
+        });
+
+        imageBatchState.active = false;
+        if (progressActions) {
+            progressActions.style.display = 'none';
+        }
+        if (startButton) {
+            startButton.style.display = 'block';
+        }
+
+        const resultContainer = document.getElementById('conversionResult');
+        if (!resultContainer) return;
+
+        if (batchResult.cancelled) {
+            showToast('批量转换已取消', 'info');
+            const progressCurrent = document.getElementById('batchCurrentFile');
+            if (progressCurrent) {
+                progressCurrent.textContent = '已取消';
+            }
+            return;
+        }
+
+        if (!batchResult.success && batchResult.message) {
+            showToast(`批量转换失败: ${batchResult.message}`, 'error');
+            return;
+        }
+
+        renderBatchResult(resultContainer, {
+            total: batchResult.total,
+            successful: imageBatchState.successful,
+            failed: imageBatchState.failed
+        });
+    }
+
     // 加载内容到主容器
     function loadContent(category) {
         if (category === 'settings') {
@@ -1262,8 +1579,9 @@ document.addEventListener('DOMContentLoaded', () => {
                     <div id="dropZone" class="drop-zone">
                         <div class="drop-zone-content">
                             <div class="drop-zone-icon"><i class="bi bi-file-arrow-down"></i></div>
-                            <div class="drop-zone-text">点击选择或拖拽文件到此</div>
+                            <div class="drop-zone-text">${category === 'images' ? '点击多选图片或拖拽多个图片到此' : '点击选择或拖拽文件到此'}</div>
                             <span id="selectedFileName" class="selected-file-name"></span>
+                            <div id="batchSelectedList" class="batch-selected-list" style="display:none;"></div>
                             <div id="filePreviewInfo" class="file-preview-info"></div>
                         </div>
                     </div>
@@ -1373,6 +1691,11 @@ document.addEventListener('DOMContentLoaded', () => {
                     <div class="progress-bar-bg">
                         <div id="progressBar" class="progress-bar-fill"></div>
                     </div>
+                    <div id="batchProgressStats" class="batch-progress-meta"></div>
+                    <div id="batchCurrentFile" class="batch-progress-current"></div>
+                    <div id="batchProgressActions" class="batch-progress-actions" style="display:none;">
+                        <button id="cancelBatchBtn" class="secondary-btn"><i class="bi bi-x-circle"></i> 取消转换</button>
+                    </div>
                 </div>
                 <div id="conversionResult" style="display: none;"></div>
             </div>
@@ -1450,35 +1773,62 @@ document.addEventListener('DOMContentLoaded', () => {
         const pendingPath = document.body.dataset.pendingFilePath;
         const pendingName = document.body.dataset.pendingFileName;
         if (pendingPath && pendingName) {
-            selectedFilePath = pendingPath; // 更新外层状态变量
-            selectedFileName.textContent = `✓ 已选择: ${pendingName}`;
-            
-            // 更新目标格式列表
-            updateTargetFormats(category, pendingPath);
-            
-            // 清除暂存的数据，避免影响后续操作
+            if (category === 'images') {
+                selectedImageFiles = [{ filePath: pendingPath, fileName: pendingName }];
+                renderImageSelectionUI();
+                updateTargetFormats(category, pendingPath);
+            } else {
+                selectedFilePath = pendingPath;
+                selectedFileName.textContent = `✓ 已选择: ${pendingName}`;
+                updateTargetFormats(category, pendingPath);
+            }
             delete document.body.dataset.pendingFilePath;
             delete document.body.dataset.pendingFileName;
         }
-        // 点击选择文件
+
+        if (category === 'images' && !(pendingPath && pendingName)) {
+            selectedImageFiles = [];
+            renderImageSelectionUI();
+        }
+
         dropZone.addEventListener('click', async () => {
+            if (category === 'images') {
+                const result = await window.electronAPI.selectImageFiles();
+                if (!result.success || !Array.isArray(result.filePaths) || result.filePaths.length === 0) {
+                    showToast('文件选择已取消', 'info');
+                    return;
+                }
+
+                const pickedItems = result.filePaths.map((filePath, index) => ({
+                    filePath,
+                    fileName: result.fileNames[index],
+                    size: Array.isArray(result.fileSizes) ? result.fileSizes[index] : null
+                }));
+                const checked = await validateAndCollectImageFiles(pickedItems);
+                selectedImageFiles = checked.valid;
+                renderImageSelectionUI();
+
+                if (checked.valid.length > 0) {
+                    const first = checked.valid[0];
+                    updateTargetFormats(category, first.filePath);
+                    updateFilePreview(first.filePath);
+                }
+                if (checked.invalid.length > 0) {
+                    showToast(`已过滤 ${checked.invalid.length} 个无效文件`, 'info');
+                }
+                return;
+            }
+
             const result = await window.electronAPI.selectFile(category);
             if (result.filePath) {
-                // 检查是否需要自动切换分类
                 const switched = await handleFileSelection(result, category, sidebarButtons);
                 if (!switched) {
-                    // 如果没有切换分类，直接设置文件
                     selectedFilePath = result.filePath;
                     selectedFileName.textContent = `✓ 已选择: ${result.fileName}`;
                     dropZone.classList.remove('dragover');
-                    
-                    // 更新预览详情
                     updateFilePreview(result.filePath);
-
-                    // 更新目标格式列表
                     updateTargetFormats(category, result.filePath);
 
-                    // 如果是图片分类，获取并设置原始尺寸
                     if (category === 'images') {
                         const dims = await window.electronAPI.getImageDimensions(result.filePath);
                         if (dims) {
@@ -1487,13 +1837,11 @@ document.addEventListener('DOMContentLoaded', () => {
                             if (wInput && hInput) {
                                 wInput.value = dims.width;
                                 hInput.value = dims.height;
-                                // 触发 input 事件以更新锁定比例
                                 wInput.dispatchEvent(new Event('input'));
                             }
                         }
                     }
                 } else {
-                    // 如果切换了分类，在事件处理中已设置文件
                     selectedFilePath = result.filePath;
                 }
             } else {
@@ -1527,40 +1875,65 @@ document.addEventListener('DOMContentLoaded', () => {
             
             const files = e.dataTransfer.files;
             if (files.length > 0) {
-                const file = files[0];
                 showToast('正在处理拖拽文件...', 'info', 3000);
                 
                 try {
-                // 获取文件真实路径，避免生成临时文件
-                const filePath = window.electronAPI.getFilePath(file);
-                
-                if (filePath) {
-                    const result = { filePath: filePath, fileName: file.name };
-                    
-                    // 3. 使用返回的文件路径进行后续操作
-                    selectedFileName.textContent = `✓ 已选择: ${result.fileName}`;
-                    selectedFilePath = result.filePath;
-                    
-                    // 更新目标格式列表
-                    updateTargetFormats(currentCategory, result.filePath);
-                    
-                    const switched = await handleFileSelection(result, currentCategory, sidebarButtons);
-                    if (!switched) {
-                        showToast('无法自动识别分类，请从侧边栏选择合适的分类。', 'info', 4000);
+                    if (category === 'images') {
+                        const dropped = Array.from(files);
+                        const checked = await validateAndCollectImageFiles(dropped);
+                        selectedImageFiles = checked.valid;
+                        renderImageSelectionUI();
+
+                        if (checked.valid.length > 0) {
+                            updateTargetFormats(category, checked.valid[0].filePath);
+                            updateFilePreview(checked.valid[0].filePath);
+                        }
+                        if (checked.invalid.length > 0) {
+                            const invalidName = checked.invalid.slice(0, 3).map(item => `${item.name}(${item.reason})`).join('、');
+                            showToast(`已过滤 ${checked.invalid.length} 个无效文件: ${invalidName}`, 'info', 6000);
+                        }
+                        return;
                     }
-                } else {
-                    showToast('无法获取文件路径', 'error');
+
+                    const file = files[0];
+                    const filePath = window.electronAPI.getFilePath(file);
+                    if (filePath) {
+                        const result = { filePath: filePath, fileName: file.name };
+                        selectedFileName.textContent = `✓ 已选择: ${result.fileName}`;
+                        selectedFilePath = result.filePath;
+                        updateTargetFormats(currentCategory, result.filePath);
+
+                        const switched = await handleFileSelection(result, currentCategory, sidebarButtons);
+                        if (!switched) {
+                            showToast('无法自动识别分类，请从侧边栏选择合适的分类。', 'info', 4000);
+                        }
+                    } else {
+                        showToast('无法获取文件路径', 'error');
+                    }
+                } catch (error) {
+                    console.error('拖拽文件处理全过程错误:', error);
+                    showToast(`处理拖拽文件失败: ${error.message}`, 'error', 5000);
                 }
-            } catch (error) {
-                console.error('拖拽文件处理全过程错误:', error);
-                showToast(`处理拖拽文件失败: ${error.message}`, 'error', 5000);
-            }
             }
         });
         
-        // 点击开始转换按钮
-        newStartButton.addEventListener('click', () => {
-            if ((!selectedFilePath) || (!selectedFileName.textContent)) {
+        const cancelBatchBtn = document.getElementById('cancelBatchBtn');
+        if (cancelBatchBtn) {
+            cancelBatchBtn.addEventListener('click', async () => {
+                if (!imageBatchState.active || !imageBatchState.batchId) {
+                    return;
+                }
+                const cancelResult = await window.electronAPI.cancelBatchConversion(imageBatchState.batchId);
+                if (cancelResult.success) {
+                    showToast('正在取消批量转换...', 'info');
+                } else {
+                    showToast(`取消失败: ${cancelResult.message}`, 'error');
+                }
+            });
+        }
+
+        newStartButton.addEventListener('click', async () => {
+            if (category !== 'images' && ((!selectedFilePath) || (!selectedFileName.textContent))) {
                 if (!selectedFileName.textContent) {
                     showToast('请先选择一个文件', 'error');
                     selectedFilePath = null;
@@ -1606,6 +1979,16 @@ document.addEventListener('DOMContentLoaded', () => {
                 if (selected) {
                     options.icoSizes = [parseInt(selected.value, 10)];
                 }
+            }
+
+            if (category === 'images') {
+                const resultContainer = document.getElementById('conversionResult');
+                if (resultContainer) {
+                    resultContainer.style.display = 'none';
+                    resultContainer.innerHTML = '';
+                }
+                await startImageBatchConversion(category, targetFormat, options, newStartButton);
+                return;
             }
 
             showToast('正在转换文件，请稍候...', 'info', 999999);
