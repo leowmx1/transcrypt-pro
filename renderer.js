@@ -349,7 +349,37 @@ document.addEventListener('DOMContentLoaded', () => {
         const progressContainer = document.getElementById('progressContainer');
         
         if (progressBar && progressText && progressContainer) {
-            progressContainer.style.display = 'block';
+            if (value === 0) {
+                progressContainer.style.display = 'block';
+            }
+            progressBar.style.width = `${value}%`;
+            progressText.textContent = `${value}%`;
+        }
+    }
+
+    function updateEncryptionProgressBar(value) {
+        const progressBar = document.getElementById('encProgressBar');
+        const progressText = document.getElementById('encProgressText');
+        const progressContainer = document.getElementById('encProgressContainer');
+        if (progressBar && progressText && progressContainer) {
+            if (value === 0) {
+                progressContainer.style.display = 'block';
+            } else if (value === 100) {
+                progressContainer.style.display = 'none';
+            }
+            progressBar.style.width = `${value}%`;
+            progressText.textContent = `${value}%`;
+        }
+    }
+
+    function updateDecryptionProgressBar(value) {
+        const progressBar = document.getElementById('decProgressBar');
+        const progressText = document.getElementById('decProgressText');
+        const progressContainer = document.getElementById('decProgressContainer');
+        if (progressBar && progressText && progressContainer) {
+            if (value === 0) {
+                progressContainer.style.display = 'block';
+            }
             progressBar.style.width = `${value}%`;
             progressText.textContent = `${value}%`;
         }
@@ -368,6 +398,14 @@ document.addEventListener('DOMContentLoaded', () => {
             clearInterval(progressTimer);
             progressTimer = null;
         }
+    });
+
+    window.electronAPI.on('encryption-progress', (value) => {
+        updateEncryptionProgressBar(value);
+    });
+
+    window.electronAPI.on('decryption-progress', (value) => {
+        updateDecryptionProgressBar(value);
     });
 
     // 侧边栏按钮点击事件
@@ -614,6 +652,27 @@ document.addEventListener('DOMContentLoaded', () => {
                 <div class="button-group">
                     <button id="startEncryption"><i class="bi bi-play-circle"></i> 开始加密</button>
                 </div>
+
+                <div id="encProgressContainer" class="progress-container" style="display: none; margin-top: 24px;">
+                    <div class="progress-label">加密进度: <span id="encProgressText">0%</span></div>
+                    <div class="progress-bar-bg">
+                        <div id="encProgressBar" class="progress-bar-fill"></div>
+                    </div>
+                </div>
+
+                <div id="encResultContainer" class="conversion-result" style="display: none;">
+                    <div class="result-header">
+                        <i class="bi bi-check-circle-fill success-icon"></i>
+                        <span class="result-title">加密完成!</span>
+                    </div>
+                    <div class="result-info" id="encResultFileInfo">
+                        <!-- 文件信息将在这里动态加载 -->
+                    </div>
+                    <div class="result-actions">
+                        <button id="encShowInFolderBtn" class="secondary-btn"><i class="bi bi-folder2-open"></i> 在文件夹中显示</button>
+                        <button id="encOpenPathBtn" class="primary-btn"><i class="bi bi-box-arrow-up-right"></i> 打开文件</button>
+                    </div>
+                </div>
             </div>
         `;
     }
@@ -650,6 +709,27 @@ document.addEventListener('DOMContentLoaded', () => {
 
                 <div class="button-group">
                     <button id="startDecryption"><i class="bi bi-unlock"></i> 开始解密</button>
+                </div>
+
+                <div id="decProgressContainer" class="progress-container" style="display: none; margin-top: 24px;">
+                    <div class="progress-label">解密进度: <span id="decProgressText">0%</span></div>
+                    <div class="progress-bar-bg">
+                        <div id="decProgressBar" class="progress-bar-fill"></div>
+                    </div>
+                </div>
+
+                <div id="decResultContainer" class="conversion-result" style="display: none;">
+                    <div class="result-header">
+                        <i class="bi bi-check-circle-fill success-icon"></i>
+                        <span class="result-title">解密完成!</span>
+                    </div>
+                    <div class="result-info" id="decResultFileInfo">
+                        <!-- 文件信息将在这里动态加载 -->
+                    </div>
+                    <div class="result-actions">
+                        <button id="decShowInFolderBtn" class="secondary-btn"><i class="bi bi-folder2-open"></i> 在文件夹中显示</button>
+                        <button id="decOpenPathBtn" class="primary-btn"><i class="bi bi-box-arrow-up-right"></i> 打开文件</button>
+                    </div>
                 </div>
             </div>
         `;
@@ -738,8 +818,15 @@ document.addEventListener('DOMContentLoaded', () => {
 
         const startEncryptionBtn = document.getElementById('startEncryption');
         startEncryptionBtn.addEventListener('click', async () => {
+            const encProgressContainer = document.getElementById('encProgressContainer');
+            const encResultContainer = document.getElementById('encResultContainer');
+            encProgressContainer.style.display = 'block';
+            encResultContainer.style.display = 'none';
+            updateEncryptionProgressBar(0);
+
             if (!encFilePath) {
                 showToast('请先选择要加密的文件或文件夹', 'error');
+                encProgressContainer.style.display = 'none';
                 return;
             }
             const algorithm = document.getElementById('encAlgorithm').value;
@@ -747,19 +834,53 @@ document.addEventListener('DOMContentLoaded', () => {
             const keyFilePath = keyFilePathInput.value;
             if (keyOption === 'file' && !keyFilePath) {
                 showToast('请选择密钥文件', 'error');
+                encProgressContainer.style.display = 'none';
                 return;
             }
             showToast('正在加密...', 'info');
-            const result = await window.electronAPI.encryptFile({ 
-                filePath: encFilePath, 
-                algorithm, 
-                keyOption, 
-                keyFilePath
-            });
-            if (result.success) {
-                showToast(`加密成功！文件保存在: ${result.outputPath}`, 'success');
-            } else {
-                showToast(`加密失败: ${result.message}`, 'error');
+            try {
+                const result = await window.electronAPI.encryptFile({ 
+                    filePath: encFilePath, 
+                    algorithm, 
+                    keyOption, 
+                    keyFilePath
+                });
+                if (result.success) {
+                    showToast(`加密成功！文件保存在: ${result.outputPath}`, 'success');
+                    // 显示结果框
+                    const fileInfo = await window.electronAPI.getFileInfo(result.outputPath);
+                    const resultContainer = document.getElementById('encResultContainer');
+                    if (resultContainer && fileInfo) {
+                        encProgressContainer.style.display = 'none'; // 隐藏进度条
+                        resultContainer.innerHTML = `
+                            <div class="conversion-success-card">
+                                <div class="success-header">
+                                    <i class="bi bi-check-circle-fill"></i>
+                                    <span>加密完成</span>
+                                </div>
+                                <div class="result-info" id="encResultFileInfo">
+                                    <div class="meta-item"><i class="bi bi-file-earmark-check"></i><span class="meta-label">文件名:</span> ${result.outputPath.split(/[\\/]/).pop()}</div>
+                                    <div class="meta-item"><i class="bi bi-folder"></i><span class="meta-label">大小:</span> ${fileInfo.size}</div>
+                                </div>
+                                <div class="result-actions">
+                                    <button id="encShowInFolderBtn" class="secondary-btn"><i class="bi bi-folder2-open"></i> 在文件夹中显示</button>
+                                </div>
+                            </div>
+                        `;
+                        resultContainer.style.display = 'block';
+
+                        document.getElementById('encShowInFolderBtn').addEventListener('click', () => {
+                            window.electronAPI.showItemInFolder(result.outputPath);
+                        });
+                    }
+                } else {
+                    showToast(`加密失败: ${result.message}`, 'error');
+                }
+            } catch (error) {
+                showToast(`加密过程中发生错误: ${error.message}`, 'error');
+            } finally {
+                encProgressContainer.style.display = 'none';
+                updateEncryptionProgressBar(0);
             }
         });
     }
@@ -822,26 +943,67 @@ document.addEventListener('DOMContentLoaded', () => {
 
         const startDecryptionBtn = document.getElementById('startDecryption');
         startDecryptionBtn.addEventListener('click', async () => {
+            const decProgressContainer = document.getElementById('decProgressContainer');
+            const decResultContainer = document.getElementById('decResultContainer');
+            decProgressContainer.style.display = 'block';
+            decResultContainer.style.display = 'none';
+            updateDecryptionProgressBar(0);
+
             if (!decFilePath) {
                 showToast('请先选择要解密的文件', 'error');
+                decProgressContainer.style.display = 'none';
                 return;
             }
             const algorithm = document.getElementById('decAlgorithm').value;
             const keyFilePath = keyFilePathInput.value;
             if (!keyFilePath) {
                 showToast('请选择密钥文件', 'error');
+                decProgressContainer.style.display = 'none';
                 return;
             }
             showToast('正在解密...', 'info');
-            const result = await window.electronAPI.decryptFile({ 
-                filePath: decFilePath, 
-                algorithm, 
-                keyFilePath 
-            });
-            if (result.success) {
-                showToast(`解密成功！文件保存在: ${result.outputPath}`, 'success');
-            } else {
-                showToast(`解密失败: ${result.message}`, 'error');
+            try {
+                const result = await window.electronAPI.decryptFile({ 
+                    filePath: decFilePath, 
+                    algorithm, 
+                    keyFilePath 
+                });
+                if (result.success) {
+                    showToast(`解密成功！文件保存在: ${result.outputPath}`, 'success');
+                    // 显示结果框
+                    const fileInfo = await window.electronAPI.getFileInfo(result.outputPath);
+                    const resultContainer = document.getElementById('decResultContainer');
+                    if (resultContainer && fileInfo) {
+                        decProgressContainer.style.display = 'none'; // 隐藏进度条
+                        resultContainer.innerHTML = `
+                            <div class="conversion-success-card">
+                                <div class="success-header">
+                                    <i class="bi bi-check-circle-fill"></i>
+                                    <span>解密完成</span>
+                                </div>
+                                <div class="result-info" id="decResultFileInfo">
+                                    <div class="meta-item"><i class="bi bi-file-earmark-check"></i><span class="meta-label">文件名:</span> ${result.outputPath.split(/[\\/]/).pop()}</div>
+                                    <div class="meta-item"><i class="bi bi-folder"></i><span class="meta-label">大小:</span> ${fileInfo.size}</div>
+                                </div>
+                                <div class="result-actions">
+                                    <button id="decShowInFolderBtn" class="secondary-btn"><i class="bi bi-folder2-open"></i> 在文件夹中显示</button>
+                                </div>
+                            </div>
+                        `;
+                        resultContainer.style.display = 'block';
+
+                        document.getElementById('decShowInFolderBtn').addEventListener('click', () => {
+                            window.electronAPI.showItemInFolder(result.outputPath);
+                        });
+                    }
+                } else {
+                    showToast(`解密失败: ${result.message}`, 'error');
+                }
+            } catch (error) {
+                showToast(`解密过程中发生错误: ${error.message}`, 'error');
+            } finally {
+                decProgressContainer.style.display = 'none';
+                updateDecryptionProgressBar(0);
             }
         });
     }
