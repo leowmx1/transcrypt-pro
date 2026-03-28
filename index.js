@@ -515,6 +515,70 @@ ipcMain.handle('get-file-info', async (event, filePath) => {
     }
 });
 
+// Helper function to calculate hash for a single file
+async function calculateFileHash(filePath, algorithm) {
+    return new Promise((resolve, reject) => {
+        const hash = crypto.createHash(algorithm);
+        const fileStream = fs.createReadStream(filePath);
+
+        fileStream.on('data', (chunk) => {
+            hash.update(chunk);
+        });
+
+        fileStream.on('end', () => {
+            resolve(hash.digest('hex'));
+        });
+
+        fileStream.on('error', (err) => {
+            reject(err);
+        });
+    });
+}
+
+// Helper function to calculate hash for a folder
+async function calculateFolderHash(folderPath, algorithm) {
+    const files = await fsp.readdir(folderPath, { withFileTypes: true });
+    let allHashes = [];
+
+    for (const file of files) {
+        const fullPath = path.join(folderPath, file.name);
+        if (file.isDirectory()) {
+            const subFolderHash = await calculateFolderHash(fullPath, algorithm);
+            allHashes.push(`${file.name}:${subFolderHash}`);
+        } else if (file.isFile()) {
+            const fileHash = await calculateFileHash(fullPath, algorithm);
+            allHashes.push(`${file.name}:${fileHash}`);
+        }
+    }
+
+    // Sort the hashes to ensure consistent folder hash regardless of file system order
+    allHashes.sort();
+
+    // Hash the combined string of all sorted hashes
+    const combinedHash = crypto.createHash(algorithm);
+    combinedHash.update(allHashes.join('|'));
+    return combinedHash.digest('hex');
+}
+
+ipcMain.handle('calculate-hash', async (event, { filePath, algorithm }) => {
+    try {
+        const stats = await fsp.stat(filePath);
+        let hashValue;
+
+        if (stats.isDirectory()) {
+            hashValue = await calculateFolderHash(filePath, algorithm);
+        } else if (stats.isFile()) {
+            hashValue = await calculateFileHash(filePath, algorithm);
+        } else {
+            throw new Error('不支持的路径类型 (既不是文件也不是文件夹)');
+        }
+
+        return { success: true, hash: hashValue };
+    } catch (error) {
+        return { success: false, message: error.message };
+    }
+});
+
 ipcMain.on('show-context-menu', (event, filePath) => {
     const template = [
         { label: '在文件夹中显示', click: () => shell.showItemInFolder(filePath) },

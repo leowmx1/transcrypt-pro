@@ -136,6 +136,7 @@ const categoryNameMap = {
     'documents': '文档',
     'encryption': '文件加密',
     'decryption': '文件解密',
+    'hash': '文件哈希/校验',
     'settings': '设置'
 };
 
@@ -715,6 +716,63 @@ document.addEventListener('DOMContentLoaded', () => {
         `;
     }
 
+
+
+    function loadFileHashView() {
+        mainContent.innerHTML = `
+            <h1><i class="bi bi-hash"></i> 文件哈希/校验</h1>
+            <div class="operation-container">
+                <div class="form-group">
+                    <label><i class="bi bi-file-earmark-zip"></i> 选择文件或文件夹:</label>
+                    <div id="hashDropZone" class="drop-zone">
+                        <div class="drop-zone-content">
+                            <div class="drop-zone-icon"><i class="bi bi-file-arrow-down"></i></div>
+                            <div class="drop-zone-text">点击选择文件/文件夹 或 拖拽文件/文件夹到此</div>
+                            <span id="hashSelectedPathName" class="selected-file-name"></span>
+                        </div>
+                    </div>
+                    <button id="selectHashFolderBtn" class="secondary-btn" style="margin-top: 10px;"><i class="bi bi-folder2-open"></i> 选择文件夹</button>
+                </div>
+
+                <div class="form-group">
+                    <label for="hashAlgorithm"><i class="bi bi-calculator"></i> 哈希算法:</label>
+                    <select id="hashAlgorithm">
+                        <option value="md5">MD5</option>
+                        <option value="sha1">SHA-1</option>
+                        <option value="sha256" selected>SHA-256 (推荐)</option>
+                        <option value="sha512">SHA-512</option>
+                    </select>
+                </div>
+
+                <div class="form-group">
+                    <label for="expectedHashInput"><i class="bi bi-patch-check"></i> 期望哈希值 (用于校验):</label>
+                    <input type="text" id="expectedHashInput" placeholder="输入期望的哈希值进行校验">
+                </div>
+
+                <div class="button-group">
+                    <button id="calculateHashBtn"><i class="bi bi-play-circle"></i> 计算哈希</button>
+                </div>
+
+                <div id="hashSpinnerContainer" class="spinner-container" style="display: none; margin-top: 24px;">
+                    <div class="spinner-border text-primary" role="status">
+                        <span class="visually-hidden">Loading...</span>
+                    </div>
+                    <span class="spinner-text">正在计算哈希...</span>
+                </div>
+
+                <div id="hashResultContainer" class="conversion-result" style="display: none;">
+                    <!-- 动态加载哈希结果 -->
+                </div>
+
+
+
+                <div id="verificationResult" class="verification-result" style="display: none; margin-top: 15px;">
+                    <span id="verificationMessage"></span>
+                </div>
+            </div>
+        `;
+    }
+
     function bindEncryptionEvents() {
         const keyOptionRadios = document.querySelectorAll('input[name="keyOption"]');
         const keyFileGroup = document.getElementById('keyFileGroup');
@@ -988,6 +1046,187 @@ document.addEventListener('DOMContentLoaded', () => {
         });
     }
 
+    function bindFileHashEvents() {
+        let hashSelectedPath = null; // To store the currently selected file/folder path
+
+        const hashDropZone = document.getElementById('hashDropZone');
+        const hashSelectedPathName = document.getElementById('hashSelectedPathName');
+        const selectHashFolderBtn = document.getElementById('selectHashFolderBtn');
+        const calculateHashBtn = document.getElementById('calculateHashBtn');
+        const hashAlgorithmSelect = document.getElementById('hashAlgorithm');
+        const hashSpinnerContainer = document.getElementById('hashSpinnerContainer');
+        const hashResultContainer = document.getElementById('hashResultContainer');
+        const hashResultPath = document.getElementById('hashResultPath');
+        const hashResultAlgorithm = document.getElementById('hashResultAlgorithm');
+        const calculatedHashValue = document.getElementById('calculatedHashValue');
+        const copyHashBtn = document.getElementById('copyHashBtn');
+        const expectedHashInput = document.getElementById('expectedHashInput');
+        const verificationResult = document.getElementById('verificationResult');
+        const verificationMessage = document.getElementById('verificationMessage');
+
+        // Helper to show/hide spinner
+        function showHashSpinner(show) {
+            if (hashSpinnerContainer) {
+                hashSpinnerContainer.style.display = show ? 'flex' : 'none';
+            }
+        }
+
+        // Reset UI for new calculation
+        function resetHashUI() {
+            hashResultContainer.style.display = 'none';
+            verificationResult.style.display = 'none';
+            verificationMessage.textContent = '';
+        }
+
+        // 1. File/Folder selection via click on drop zone
+        hashDropZone.addEventListener('click', async () => {
+            const result = await window.electronAPI.selectPath(['openFile']);
+            if (result.success) {
+                hashSelectedPath = result.filePath;
+                hashSelectedPathName.textContent = `✓ 已选择: ${result.fileName}`;
+                resetHashUI();
+            } else {
+                showToast('文件/文件夹选择已取消', 'info');
+            }
+        });
+
+        // 2. Folder selection via button
+        selectHashFolderBtn.addEventListener('click', async () => {
+            const result = await window.electronAPI.selectPath(['openDirectory']);
+            if (result.success) {
+                hashSelectedPath = result.filePath;
+                hashSelectedPathName.textContent = `✓ 已选择: ${result.fileName}`;
+                resetHashUI();
+            } else {
+                showToast('文件夹选择已取消', 'info');
+            }
+        });
+
+        // 3. Drag-and-drop events
+        hashDropZone.addEventListener('dragover', (e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            hashDropZone.classList.add('dragover');
+        });
+
+        hashDropZone.addEventListener('dragleave', (e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            hashDropZone.classList.remove('dragover');
+        });
+
+        hashDropZone.addEventListener('drop', async (e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            hashDropZone.classList.remove('dragover');
+            const files = e.dataTransfer.files;
+            if (files.length > 0) {
+                const file = files[0];
+                try {
+                    const filePath = window.electronAPI.getFilePath(file);
+                    if (filePath) {
+                        hashSelectedPath = filePath;
+                        hashSelectedPathName.textContent = `✓ 已选择: ${file.name}`;
+                        resetHashUI();
+                    } else {
+                        showToast('无法获取文件路径', 'error');
+                    }
+                } catch (error) {
+                    showToast(`处理拖拽文件失败: ${error.message}`, 'error');
+                }
+            }
+        });
+
+        // 4. Calculate Hash button click
+        calculateHashBtn.addEventListener('click', async () => {
+            if (!hashSelectedPath) {
+                showToast('请先选择文件或文件夹', 'error');
+                return;
+            }
+            const algorithm = hashAlgorithmSelect.value;
+            resetHashUI();
+            showHashSpinner(true);
+            showToast('正在计算哈希...', 'info');
+
+            try {
+                const result = await window.electronAPI.calculateHash(hashSelectedPath, algorithm);
+                if (result.success) {
+                    const calculatedHash = result.hash;
+                    const expectedHash = expectedHashInput.value.trim();
+
+                    let resultTitle = '哈希计算完成！';
+                    let headerIconClass = 'bi-check-circle-fill';
+                    let headerClass = 'success-header';
+                    let cardClass = 'conversion-success-card';
+
+                    if (expectedHash) {
+                        const match = calculatedHash.toLowerCase() === expectedHash.toLowerCase();
+                        if (match) {
+                            resultTitle = '哈希值匹配！';
+                        } else {
+                            resultTitle = '哈希值不匹配！';
+                            headerIconClass = 'bi-x-circle-fill';
+                            headerClass = 'error-header';
+                            cardClass = 'conversion-error-card';
+                        }
+                    }
+
+                    hashResultContainer.innerHTML = `
+                        <div class="${cardClass}">
+                            <div class="${headerClass}">
+                                <i class="${headerIconClass}"></i>
+                                <span>${resultTitle}</span>
+                            </div>
+                            <div class="result-info">
+                                <div class="meta-item"><span class="meta-label">文件/文件夹:</span> <span id="hashResultPath">${hashSelectedPath.split(/[\\/]/).pop()}</span></div>
+                                <div class="meta-item"><span class="meta-label">算法:</span> <span id="hashResultAlgorithm">${algorithm.toUpperCase()}</span></div>
+                                <div class="meta-item"><span class="meta-label">哈希值:</span> <span id="calculatedHashValue" style="word-break: break-all;">${calculatedHash}</span></div>
+                            </div>
+                            <div class="result-actions">
+                                <button id="copyHashBtn" class="secondary-btn"><i class="bi bi-clipboard"></i> 复制哈希值</button>
+                            </div>
+                        </div>
+                    `;
+                    hashResultContainer.style.display = 'block';
+
+                    // 重新绑定复制按钮事件
+                    document.getElementById('copyHashBtn').addEventListener('click', () => {
+                        navigator.clipboard.writeText(calculatedHash).then(() => {
+                            showToast('哈希值已复制到剪贴板', 'success');
+                        }).catch(err => {
+                            showToast(`复制失败: ${err.message}`, 'error');
+                        });
+                    });
+
+                    showToast('哈希计算完成！', 'success');
+
+                } else {
+                    showToast(`哈希计算失败: ${result.message}`, 'error');
+                }
+            } catch (error) {
+                showToast(`哈希计算过程中发生错误: ${error.message}`, 'error');
+            } finally {
+                showHashSpinner(false);
+            }
+        });
+
+        // 5. Copy Hash button click
+        copyHashBtn.addEventListener('click', () => {
+            const hash = calculatedHashValue.textContent;
+            if (hash) {
+                navigator.clipboard.writeText(hash).then(() => {
+                    showToast('哈希值已复制到剪贴板', 'success');
+                }).catch(err => {
+                    showToast(`复制失败: ${err.message}`, 'error');
+                });
+            } else {
+                showToast('没有可复制的哈希值', 'info');
+            }
+        });
+
+
+    }
+
     // 加载内容到主容器
     function loadContent(category) {
         if (category === 'settings') {
@@ -1002,6 +1241,11 @@ document.addEventListener('DOMContentLoaded', () => {
         if (category === 'decryption') {
             loadDecryptionView();
             bindDecryptionEvents();
+            return;
+        }
+        if (category === 'hash') {
+            loadFileHashView();
+            bindFileHashEvents();
             return;
         }
         //selectedFilePath = null; // 重置文件选择

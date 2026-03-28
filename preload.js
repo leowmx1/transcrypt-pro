@@ -23,5 +23,6 @@ contextBridge.exposeInMainWorld('electronAPI', {
     onProgress: (callback) => ipcRenderer.on('conversion-progress', (_event, value) => callback(value)),
     encryptFile: (options) => ipcRenderer.invoke('encrypt-file', options),
     decryptFile: (options) => ipcRenderer.invoke('decrypt-file', options),
+    calculateHash: (filePath, algorithm) => ipcRenderer.invoke('calculate-hash', { filePath, algorithm }),
     on: (channel, callback) => ipcRenderer.on(channel, (_event, ...args) => callback(...args))
 });
