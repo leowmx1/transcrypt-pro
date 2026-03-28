@@ -841,6 +841,7 @@ document.addEventListener('DOMContentLoaded', () => {
                                 </div>
                                 <div class="result-actions">
                                     <button id="encShowInFolderBtn" class="secondary-btn"><i class="bi bi-folder2-open"></i> 在文件夹中显示</button>
+                                    <button id="encOpenPathBtn" class="modal-btn modal-btn-primary"><i class="bi bi-box-arrow-up-right"></i> 打开文件</button>
                                 </div>
                             </div>
                         `;
@@ -848,6 +849,9 @@ document.addEventListener('DOMContentLoaded', () => {
 
                         document.getElementById('encShowInFolderBtn').addEventListener('click', () => {
                             window.electronAPI.showItemInFolder(result.outputPath);
+                        });
+                        document.getElementById('encOpenPathBtn').addEventListener('click', () => {
+                            window.electronAPI.openPath(result.outputPath);
                         });
                     }
                 } else {
@@ -960,6 +964,7 @@ document.addEventListener('DOMContentLoaded', () => {
                                 </div>
                                 <div class="result-actions">
                                     <button id="decShowInFolderBtn" class="secondary-btn"><i class="bi bi-folder2-open"></i> 在文件夹中显示</button>
+                                    <button id="decOpenPathBtn" class="modal-btn modal-btn-primary"><i class="bi bi-box-arrow-up-right"></i> 打开文件</button>
                                 </div>
                             </div>
                         `;
@@ -967,6 +972,9 @@ document.addEventListener('DOMContentLoaded', () => {
 
                         document.getElementById('decShowInFolderBtn').addEventListener('click', () => {
                             window.electronAPI.showItemInFolder(result.outputPath);
+                        });
+                        document.getElementById('decOpenPathBtn').addEventListener('click', () => {
+                            window.electronAPI.openPath(result.outputPath);
                         });
                     }
                 } else {
