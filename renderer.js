@@ -1410,7 +1410,6 @@ document.addEventListener('DOMContentLoaded', () => {
                     ${failedItems}
                 </div>
                 <div class="result-actions batch-result-actions">
-                    <button id="batchDownloadZipBtn" class="secondary-btn"><i class="bi bi-file-earmark-zip"></i> 打包保存</button>
                     <button id="batchOpenFolderBtn" class="secondary-btn"><i class="bi bi-folder2-open"></i> 打开所在文件夹</button>
                     ${failed.length > 0 ? '<button id="batchRetryFailedBtn" class="modal-btn modal-btn-primary"><i class="bi bi-arrow-repeat"></i> 重试失败文件</button>' : ''}
                 </div>
@@ -1418,27 +1417,8 @@ document.addEventListener('DOMContentLoaded', () => {
         `;
         container.style.display = 'block';
 
-        const zipBtn = document.getElementById('batchDownloadZipBtn');
         const folderBtn = document.getElementById('batchOpenFolderBtn');
         const retryBtn = document.getElementById('batchRetryFailedBtn');
-
-        if (zipBtn) {
-            zipBtn.onclick = async () => {
-                if (!successful.length) {
-                    showToast('没有可打包的成功文件', 'info');
-                    return;
-                }
-                const zipResult = await window.electronAPI.createBatchZip(successful.map(item => item.outputPath), `images-${Date.now()}`);
-                if (zipResult.success) {
-                    showToast(`已生成压缩包: ${zipResult.zipPath}`, 'success');
-                    if (Settings.get('openFolder', false)) {
-                        window.electronAPI.showItemInFolder(zipResult.zipPath);
-                    }
-                } else {
-                    showToast(`打包失败: ${zipResult.message}`, 'error');
-                }
-            };
-        }
 
         if (folderBtn) {
             folderBtn.onclick = () => {
