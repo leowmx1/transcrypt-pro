@@ -1410,8 +1410,8 @@ document.addEventListener('DOMContentLoaded', () => {
                     ${failedItems}
                 </div>
                 <div class="result-actions batch-result-actions">
-                    <button id="batchDownloadZipBtn" class="secondary-btn"><i class="bi bi-file-earmark-zip"></i> 打包下载</button>
-                    <button id="batchOpenFolderBtn" class="secondary-btn"><i class="bi bi-folder2-open"></i> 逐个下载（打开目录）</button>
+                    <button id="batchDownloadZipBtn" class="secondary-btn"><i class="bi bi-file-earmark-zip"></i> 打包保存</button>
+                    <button id="batchOpenFolderBtn" class="secondary-btn"><i class="bi bi-folder2-open"></i> 打开所在文件夹</button>
                     ${failed.length > 0 ? '<button id="batchRetryFailedBtn" class="modal-btn modal-btn-primary"><i class="bi bi-arrow-repeat"></i> 重试失败文件</button>' : ''}
                 </div>
             </div>
