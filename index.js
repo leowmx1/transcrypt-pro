@@ -19,9 +19,29 @@ const IMAGE_FILE_FILTERS = [
     { name: '图片文件', extensions: ['jpg', 'jpeg', 'png', 'gif', 'bmp', 'webp'] },
     { name: '所有文件', extensions: ['*'] }
 ];
+const VIDEO_FILE_FILTERS = [
+    { name: '视频文件', extensions: ['mp4', 'avi', 'mkv', 'mov', 'flv', 'webm', 'wmv'] },
+    { name: '所有文件', extensions: ['*'] }
+];
+const AUDIO_FILE_FILTERS = [
+    { name: '音频文件', extensions: ['mp3', 'wav', 'flac', 'aac', 'ogg', 'm4a', 'wma'] },
+    { name: '所有文件', extensions: ['*'] }
+];
+const DOCUMENT_FILE_FILTERS = [
+    { name: '文档文件', extensions: ['pdf', 'docx', 'doc', 'xlsx', 'xls', 'pptx', 'ppt', 'txt', 'odt', 'ods', 'odp', 'csv', 'rtf'] },
+    { name: '所有文件', extensions: ['*'] }
+];
 
 const settingsPath = path.join(app.getPath('userData'), 'settings.json');
 const activeBatchControllers = new Map();
+
+function getFiltersByCategory(category) {
+    if (category === 'images') return IMAGE_FILE_FILTERS;
+    if (category === 'videos') return VIDEO_FILE_FILTERS;
+    if (category === 'audio') return AUDIO_FILE_FILTERS;
+    if (category === 'documents') return DOCUMENT_FILE_FILTERS;
+    return undefined;
+}
 
 // 封装获取二进制文件路径的函数
 function getBinaryPath(type) {
@@ -159,7 +179,7 @@ ipcMain.handle('select-file', async (event, { category }) => {
         const result = await dialog.showOpenDialog({
             title: '选择要转换的文件',
             properties: ['openFile'],
-            filters: category === 'images' ? IMAGE_FILE_FILTERS : undefined
+            filters: getFiltersByCategory(category)
         });
         
         if (result.canceled || result.filePaths.length === 0) {
@@ -182,6 +202,36 @@ ipcMain.handle('select-file', async (event, { category }) => {
     }
 });
 
+ipcMain.handle('select-files', async (event, { category }) => {
+    try {
+        const result = await dialog.showOpenDialog({
+            title: '选择要批量转换的文件',
+            properties: ['openFile', 'multiSelections'],
+            filters: getFiltersByCategory(category)
+        });
+        if (result.canceled || result.filePaths.length === 0) {
+            return { success: false };
+        }
+        return {
+            success: true,
+            filePaths: result.filePaths,
+            fileNames: result.filePaths.map(filePath => path.basename(filePath)),
+            fileSizes: result.filePaths.map(filePath => {
+                try {
+                    return fs.statSync(filePath).size;
+                } catch (error) {
+                    return null;
+                }
+            })
+        };
+    } catch (error) {
+        return {
+            success: false,
+            message: `选择文件失败: ${error.message}`
+        };
+    }
+});
+
 // 处理路径选择（文件或文件夹）
 ipcMain.handle('select-path', async (event, properties) => {
     try {
@@ -200,9 +250,9 @@ ipcMain.handle('select-path', async (event, properties) => {
 ipcMain.handle('select-image-files', async () => {
     try {
         const result = await dialog.showOpenDialog({
-            title: '选择要批量转换的图片',
+            title: '选择要批量转换的文件',
             properties: ['openFile', 'multiSelections'],
-            filters: IMAGE_FILE_FILTERS
+            filters: [{ name: '所有支持文件', extensions: ['*'] }]
         });
         if (result.canceled || result.filePaths.length === 0) {
             return { success: false };
@@ -287,8 +337,8 @@ ipcMain.handle('convert-file', async (event, { filePath, targetFormat, category,
     }
 });
 
-ipcMain.handle('batch-convert-images', async (event, payload) => {
-    const { batchId, files, targetFormat, options, outputDirectory, concurrency = 3 } = payload || {};
+async function handleBatchConvert(event, payload) {
+    const { batchId, files, targetFormat, category, options, outputDirectory, concurrency = 3 } = payload || {};
     if (!batchId) {
         return { success: false, message: '缺少批次标识' };
     }
@@ -297,6 +347,9 @@ ipcMain.handle('batch-convert-images', async (event, payload) => {
     }
     if (!targetFormat) {
         return { success: false, message: '缺少目标格式' };
+    }
+    if (!category || !['images', 'videos', 'audio', 'documents'].includes(category)) {
+        return { success: false, message: '不支持的批量分类' };
     }
     if (!outputDirectory) {
         return { success: false, message: '缺少输出目录' };
@@ -334,7 +387,7 @@ ipcMain.handle('batch-convert-images', async (event, payload) => {
                     filePath,
                     outputPath,
                     targetFormat,
-                    category: 'images',
+                    category,
                     options,
                     controller,
                     batchId
@@ -386,6 +439,17 @@ ipcMain.handle('batch-convert-images', async (event, payload) => {
     } finally {
         activeBatchControllers.delete(batchId);
     }
+}
+
+ipcMain.handle('batch-convert-files', async (event, payload) => {
+    return await handleBatchConvert(event, payload);
+});
+
+ipcMain.handle('batch-convert-images', async (event, payload) => {
+    return await handleBatchConvert(event, {
+        ...(payload || {}),
+        category: payload && payload.category ? payload.category : 'images'
+    });
 });
 
 ipcMain.handle('cancel-batch-conversion', async (event, { batchId }) => {
