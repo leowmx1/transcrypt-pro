@@ -166,13 +166,24 @@ const formatCompatibilityMap = {
 
 const imageExtensions = new Set(['jpg', 'jpeg', 'png', 'gif', 'bmp', 'webp']);
 const maxImageFileSizeBytes = 50 * 1024 * 1024;
+const ORIGINAL_FORMAT_VALUE = '__original__';
+
+function supportsOriginalFormatSelection(category) {
+    return category === 'images' || category === 'videos';
+}
+
+function getFileExtension(filePath) {
+    if (!filePath || typeof filePath !== 'string') return '';
+    const ext = filePath.split('.').pop();
+    return ext ? ext.toLowerCase() : '';
+}
 
 // 根据源文件更新目标格式列表
 function updateTargetFormats(category, sourceFilePath) {
     const targetSelect = document.getElementById('targetFormat');
     if (!targetSelect) return;
 
-    const sourceExt = sourceFilePath ? sourceFilePath.split('.').pop().toLowerCase() : null;
+    const sourceExt = sourceFilePath ? getFileExtension(sourceFilePath) : null;
     const sourceCategory = detectFileCategory(sourceFilePath);
     let availableFormats = formatMap[category] || [];
 
@@ -186,18 +197,23 @@ function updateTargetFormats(category, sourceFilePath) {
         availableFormats = formatMap['audio'];
     }
 
-    // 过滤掉与源文件相同的格式
-    const filteredFormats = availableFormats.filter(f => f.toLowerCase() !== sourceExt);
+    const filteredFormats = supportsOriginalFormatSelection(category)
+        ? availableFormats
+        : availableFormats.filter(f => f.toLowerCase() !== sourceExt);
 
     // 更新下拉菜单
     const currentSelection = targetSelect.value;
+    const originalFormatOption = supportsOriginalFormatSelection(category)
+        ? `<option value="${ORIGINAL_FORMAT_VALUE}">原格式${sourceExt ? ` (${sourceExt.toUpperCase()})` : ''}</option>`
+        : '';
     targetSelect.innerHTML = `
         <option value="">-- 请选择目标格式 --</option>
+        ${originalFormatOption}
         ${filteredFormats.map(f => `<option value="${f}">${f}</option>`).join('')}
     `;
 
     // 如果之前的选择在新的列表中仍然有效，则保持选择
-    if (filteredFormats.includes(currentSelection)) {
+    if (currentSelection === ORIGINAL_FORMAT_VALUE || filteredFormats.includes(currentSelection)) {
         targetSelect.value = currentSelection;
     }
 }
@@ -1558,6 +1574,9 @@ document.addEventListener('DOMContentLoaded', () => {
         const formats = formatMap[category] || [];
         
         let formatOptions = formats.map(format => `<option value="${format}">${format}</option>`).join('');
+        const originalFormatOption = supportsOriginalFormatSelection(category)
+            ? `<option value="${ORIGINAL_FORMAT_VALUE}">原格式</option>`
+            : '';
         
         mainContent.innerHTML = `
             <h1>${categoryName} 转换</h1>
@@ -1578,6 +1597,7 @@ document.addEventListener('DOMContentLoaded', () => {
                     <label for="targetFormat"><i class="bi bi-bullseye"></i> 目标格式:</label>
                     <select id="targetFormat">
                         <option value="">-- 请选择目标格式 --</option>
+                        ${originalFormatOption}
                         ${formatOptions}
                     </select>
                 </div>
@@ -1651,6 +1671,17 @@ document.addEventListener('DOMContentLoaded', () => {
                             </div>
                         </div>
 
+                        <div id="privacySettingsField" style="display:none;">
+                            <div class="settings-grid">
+                                <div class="setting-item">
+                                    <label style="display:flex;align-items:center;gap:8px;">
+                                        <input type="checkbox" id="privacySanitize">
+                                        <span>隐私脱敏（清除元数据）</span>
+                                    </label>
+                                </div>
+                            </div>
+                        </div>
+
                         <!-- 音频高级设置 -->
                         <div id="audioSettingsFields" style="display:none;">
                             <div class="settings-grid">
@@ -1704,6 +1735,7 @@ document.addEventListener('DOMContentLoaded', () => {
             document.getElementById('imageSettingsFields').style.display = category === 'images' ? 'block' : 'none';
             document.getElementById('videoSettingsFields').style.display = category === 'videos' ? 'block' : 'none';
             document.getElementById('audioSettingsFields').style.display = category === 'audio' ? 'block' : 'none';
+            document.getElementById('privacySettingsField').style.display = (category === 'images' || category === 'videos') ? 'block' : 'none';
 
             const toggle = document.getElementById('advancedToggle');
             const content = document.getElementById('advancedContent');
@@ -1945,18 +1977,22 @@ document.addEventListener('DOMContentLoaded', () => {
                 const width = document.getElementById('imgWidth').value;
                 const height = document.getElementById('imgHeight').value;
                 const quality = document.getElementById('imgQuality').value;
+                const privacySanitize = document.getElementById('privacySanitize');
                 
                 if (width) options.width = parseInt(width, 10);
                 if (height) options.height = parseInt(height, 10);
                 options.quality = parseInt(quality, 10);
+                options.privacySanitize = !!(privacySanitize && privacySanitize.checked);
             }
 
             // 收集视频高级选项
             if (category === 'videos') {
                 const res = document.getElementById('videoRes').value;
                 const preset = document.getElementById('videoPreset').value;
+                const privacySanitize = document.getElementById('privacySanitize');
                 if (res) options.videoRes = res;
                 if (preset) options.videoPreset = preset;
+                options.privacySanitize = !!(privacySanitize && privacySanitize.checked);
             }
 
             // 收集音频高级选项
@@ -2016,7 +2052,13 @@ document.addEventListener('DOMContentLoaded', () => {
 
         // 显示/隐藏 ICO 分辨率选项及高级设置
         targetFormatSelect.addEventListener('change', (e) => {
-            const format = e.target.value.toLowerCase();
+            const selectedFormat = e.target.value;
+            const referencePath = isBatchSupportedCategory(category) && selectedBatchFiles[0]
+                ? selectedBatchFiles[0].filePath
+                : selectedFilePath;
+            const format = selectedFormat === ORIGINAL_FORMAT_VALUE
+                ? getFileExtension(referencePath)
+                : selectedFormat.toLowerCase();
             const isIco = format === 'ico';
             const supportsImgQuality = ['jpg', 'jpeg'].includes(format);
             const supportsAudioBitrate = ['mp3', 'aac', 'm4a', 'ogg', 'wma'].includes(format);

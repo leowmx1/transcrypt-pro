@@ -77,6 +77,7 @@ async function convertImage(inputPath, outputPath, targetFormat, options) {
                     // -background none -gravity center -extent ${s}x${s} 确保即使原图比例不对也能生成正方形
                     execFileSync('magick', [
                         inputPath, 
+                        ...(options && options.privacySanitize ? ['-strip'] : []),
                         '-resize', `${s}x${s}`, 
                         '-background', 'none', 
                         '-gravity', 'center', 
@@ -107,6 +108,9 @@ async function convertImage(inputPath, outputPath, targetFormat, options) {
 
         // Other formats
         const args = [inputPath];
+        if (options && options.privacySanitize) {
+            args.push('-strip');
+        }
         
         // Apply resize if provided
         if (options && (options.width || options.height)) {
@@ -143,6 +147,10 @@ async function convertImage(inputPath, outputPath, targetFormat, options) {
 async function convertVideo(inputPath, outputPath, targetFormat, options, ffmpegPath) {
     return new Promise((resolve, reject) => {
         const args = ['-i', inputPath, '-y'];
+
+        if (options && options.privacySanitize) {
+            args.push('-map_metadata', '-1', '-map_chapters', '-1');
+        }
 
         // 视频分辨率
         if (options.videoRes) {

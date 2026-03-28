@@ -31,6 +31,7 @@ const DOCUMENT_FILE_FILTERS = [
     { name: '文档文件', extensions: ['pdf', 'docx', 'doc', 'xlsx', 'xls', 'pptx', 'ppt', 'txt', 'odt', 'ods', 'odp', 'csv', 'rtf'] },
     { name: '所有文件', extensions: ['*'] }
 ];
+const ORIGINAL_FORMAT_VALUE = '__original__';
 
 const settingsPath = path.join(app.getPath('userData'), 'settings.json');
 const activeBatchControllers = new Map();
@@ -41,6 +42,41 @@ function getFiltersByCategory(category) {
     if (category === 'audio') return AUDIO_FILE_FILTERS;
     if (category === 'documents') return DOCUMENT_FILE_FILTERS;
     return undefined;
+}
+
+function supportsOriginalFormatSelection(category) {
+    return category === 'images' || category === 'videos';
+}
+
+function resolveTargetFormatForFile(filePath, targetFormat, category) {
+    if (targetFormat !== ORIGINAL_FORMAT_VALUE) {
+        return String(targetFormat || '').toLowerCase();
+    }
+    if (!supportsOriginalFormatSelection(category)) {
+        throw new Error('当前分类不支持原格式输出');
+    }
+    const sourceExt = path.extname(filePath).replace('.', '').toLowerCase();
+    if (!sourceExt) {
+        throw new Error('无法识别源文件格式');
+    }
+    return sourceExt;
+}
+
+function ensureUniqueOutputPath(desiredPath) {
+    if (!fs.existsSync(desiredPath)) {
+        return desiredPath;
+    }
+    const dir = path.dirname(desiredPath);
+    const ext = path.extname(desiredPath);
+    const baseName = path.basename(desiredPath, ext);
+    let index = 1;
+    while (true) {
+        const candidate = path.join(dir, `${baseName}(${index})${ext}`);
+        if (!fs.existsSync(candidate)) {
+            return candidate;
+        }
+        index += 1;
+    }
 }
 
 // 封装获取二进制文件路径的函数
@@ -301,15 +337,18 @@ ipcMain.handle('select-output-directory', async () => {
 // 处理文件转换请求
 ipcMain.handle('convert-file', async (event, { filePath, targetFormat, category, options }) => {
     try {
+        const resolvedTargetFormat = resolveTargetFormatForFile(filePath, targetFormat, category);
         const fileName = path.basename(filePath, path.extname(filePath));
-        const newFileName = `${fileName}.${targetFormat.toLowerCase()}`;
+        const sourceExt = path.extname(filePath).replace('.', '').toLowerCase();
+        const useSanitizedSuffix = targetFormat === ORIGINAL_FORMAT_VALUE || sourceExt === resolvedTargetFormat;
+        const newFileName = `${fileName}${useSanitizedSuffix ? '_sanitized' : ''}.${resolvedTargetFormat}`;
         
         // 显示保存文件对话框
         const result = await dialog.showSaveDialog({
             title: '保存转换后的文件',
             defaultPath: path.join(path.dirname(filePath), newFileName),
             filters: [
-                { name: targetFormat, extensions: [targetFormat.toLowerCase()] },
+                { name: resolvedTargetFormat.toUpperCase(), extensions: [resolvedTargetFormat] },
                 { name: '所有文件', extensions: ['*'] }
             ]
         });
@@ -324,7 +363,7 @@ ipcMain.handle('convert-file', async (event, { filePath, targetFormat, category,
             sender: event.sender,
             filePath,
             outputPath,
-            targetFormat,
+            targetFormat: resolvedTargetFormat,
             category,
             options
         });
@@ -368,10 +407,8 @@ async function handleBatchConvert(event, payload) {
                 if (controller.cancelled) {
                     return { success: false, filePath, cancelled: true, message: '已取消' };
                 }
-
-                const baseName = path.basename(filePath, path.extname(filePath));
-                const ext = targetFormat.toLowerCase();
-                const outputPath = path.join(outputDirectory, `${baseName}.${ext}`);
+                let result;
+                let outputPath = null;
 
                 event.sender.send('batch-conversion-progress', {
                     batchId,
@@ -382,16 +419,28 @@ async function handleBatchConvert(event, payload) {
                     total
                 });
 
-                const result = await runWorkerConversion({
-                    sender: event.sender,
-                    filePath,
-                    outputPath,
-                    targetFormat,
-                    category,
-                    options,
-                    controller,
-                    batchId
-                });
+                try {
+                    const resolvedTargetFormat = resolveTargetFormatForFile(filePath, targetFormat, category);
+                    const sourceExt = path.extname(filePath).replace('.', '').toLowerCase();
+                    const baseName = path.basename(filePath, path.extname(filePath));
+                    const useSanitizedSuffix = targetFormat === ORIGINAL_FORMAT_VALUE || sourceExt === resolvedTargetFormat;
+                    outputPath = ensureUniqueOutputPath(path.join(outputDirectory, `${baseName}${useSanitizedSuffix ? '_sanitized' : ''}.${resolvedTargetFormat}`));
+                    result = await runWorkerConversion({
+                        sender: event.sender,
+                        filePath,
+                        outputPath,
+                        targetFormat: resolvedTargetFormat,
+                        category,
+                        options,
+                        controller,
+                        batchId
+                    });
+                } catch (error) {
+                    result = {
+                        success: false,
+                        message: `转换失败: ${error.message}`
+                    };
+                }
 
                 completed += 1;
                 const success = !!result.success;
