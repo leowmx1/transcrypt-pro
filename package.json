@@ -1,6 +1,6 @@
 {
   "name": "transcrypt-pro",
-  "version": "1.0.0",
+  "version": "1.3.0",
   "description": "A powerful file format transformer and encryption tool built with Electron.",
   "main": "index.js",
   "scripts": {
