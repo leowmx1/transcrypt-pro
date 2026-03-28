@@ -357,19 +357,6 @@ ipcMain.handle('encrypt-file', async (event, { filePath, algorithm, keyOption, k
 
         const stats = await fsp.stat(filePath);
         const isDirectory = stats.isDirectory();
-        
-        let totalSize = 0;
-        let processedSize = 0;
-        let lastProgress = 0;
-
-        const sendProgress = (currentProcessedSize) => {
-            processedSize += currentProcessedSize;
-            const progress = Math.floor((processedSize / totalSize) * 100);
-            if (progress > lastProgress) {
-                event.sender.send('encryption-progress', progress);
-                lastProgress = progress;
-            }
-        };
 
         const outputExt = isDirectory ? '.dir.enc' : '.enc';
         const outputFileName = `${path.basename(filePath)}${outputExt}`;
@@ -390,30 +377,16 @@ ipcMain.handle('encrypt-file', async (event, { filePath, algorithm, keyOption, k
 
         if (isDirectory) {
             const archive = archiver('zip', { zlib: { level: 9 } });
-            archive.on('progress', (progressData) => {
-                // Archiver's progress reports entries, not bytes. Adjust totalSize for accurate byte progress.
-                // For now, we'll use entry count as a proxy for progress.
-                if (progressData.entries.total > 0) {
-                    const progress = Math.floor((progressData.entries.processed / progressData.entries.total) * 100);
-                    if (progress > lastProgress) {
-                        event.sender.send('encryption-progress', progress);
-                        lastProgress = progress;
-                    }
-                }
-            });
             archive.pipe(cipher).pipe(writeStream);
             archive.directory(filePath, false);
             await archive.finalize();
         } else {
-            totalSize = stats.size; // Set totalSize for single file
             const readStream = fs.createReadStream(filePath);
-            readStream.on('data', (chunk) => sendProgress(chunk.length));
             readStream.pipe(cipher).pipe(writeStream);
         }
 
         await new Promise((resolve, reject) => {
             writeStream.on('finish', () => {
-                event.sender.send('encryption-progress', 100); // Send 100% on finish
                 const authTag = cipher.getAuthTag();
                 fs.appendFileSync(outputPath, authTag);
                 resolve();
@@ -450,18 +423,6 @@ ipcMain.handle('decrypt-file', async (event, { filePath, algorithm, keyOption, k
         const outputPath = saveResult.filePath;
 
         const fileBuffer = fs.readFileSync(filePath); // Read the entire file into a buffer
-        const totalBytes = fileBuffer.length - IV_LENGTH - AUTH_TAG_LENGTH; // Encrypted data size
-        let processedBytes = 0;
-        let lastProgress = 0;
-
-        const sendProgress = (currentBytes) => {
-            processedBytes += currentBytes;
-            const progress = Math.floor((processedBytes / totalBytes) * 100);
-            if (progress > lastProgress) {
-                event.sender.send('decryption-progress', progress);
-                lastProgress = progress;
-            }
-        };
 
         const iv = fileBuffer.slice(0, IV_LENGTH);
         const authTag = fileBuffer.slice(fileBuffer.length - AUTH_TAG_LENGTH);
@@ -477,7 +438,6 @@ ipcMain.handle('decrypt-file', async (event, { filePath, algorithm, keyOption, k
             await new Promise((resolve, reject) => {
                 const bufferStream = new stream.PassThrough();
                 bufferStream.end(encryptedDataBuffer);
-                bufferStream.on('data', (chunk) => sendProgress(chunk.length));
                 bufferStream.pipe(decipher).pipe(writeStream)
                     .on('finish', resolve)
                     .on('error', reject);
@@ -512,7 +472,6 @@ ipcMain.handle('decrypt-file', async (event, { filePath, algorithm, keyOption, k
             const writeStream = fs.createWriteStream(outputPath);
             const bufferStream = new stream.PassThrough();
             bufferStream.end(encryptedDataBuffer);
-            bufferStream.on('data', (chunk) => sendProgress(chunk.length));
             await new Promise((resolve, reject) => {
                 bufferStream.pipe(decipher).pipe(writeStream)
                     .on('finish', resolve)
@@ -520,7 +479,6 @@ ipcMain.handle('decrypt-file', async (event, { filePath, algorithm, keyOption, k
             });
         }
 
-        event.sender.send('decryption-progress', 100); // Send 100% on finish
         return { success: true, outputPath };
 
     } catch (error) {

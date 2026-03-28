@@ -357,31 +357,17 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     }
 
-    function updateEncryptionProgressBar(value) {
-        const progressBar = document.getElementById('encProgressBar');
-        const progressText = document.getElementById('encProgressText');
-        const progressContainer = document.getElementById('encProgressContainer');
-        if (progressBar && progressText && progressContainer) {
-            if (value === 0) {
-                progressContainer.style.display = 'block';
-            } else if (value === 100) {
-                progressContainer.style.display = 'none';
-            }
-            progressBar.style.width = `${value}%`;
-            progressText.textContent = `${value}%`;
+    function showEncryptionSpinner(show) {
+        const spinnerContainer = document.getElementById('encSpinnerContainer');
+        if (spinnerContainer) {
+            spinnerContainer.style.display = show ? 'flex' : 'none';
         }
     }
 
-    function updateDecryptionProgressBar(value) {
-        const progressBar = document.getElementById('decProgressBar');
-        const progressText = document.getElementById('decProgressText');
-        const progressContainer = document.getElementById('decProgressContainer');
-        if (progressBar && progressText && progressContainer) {
-            if (value === 0) {
-                progressContainer.style.display = 'block';
-            }
-            progressBar.style.width = `${value}%`;
-            progressText.textContent = `${value}%`;
+    function showDecryptionSpinner(show) {
+        const spinnerContainer = document.getElementById('decSpinnerContainer');
+        if (spinnerContainer) {
+            spinnerContainer.style.display = show ? 'flex' : 'none';
         }
     }
 
@@ -400,13 +386,7 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     });
 
-    window.electronAPI.on('encryption-progress', (value) => {
-        updateEncryptionProgressBar(value);
-    });
 
-    window.electronAPI.on('decryption-progress', (value) => {
-        updateDecryptionProgressBar(value);
-    });
 
     // 侧边栏按钮点击事件
     sidebarButtons.forEach(button => {
@@ -653,11 +633,11 @@ document.addEventListener('DOMContentLoaded', () => {
                     <button id="startEncryption"><i class="bi bi-play-circle"></i> 开始加密</button>
                 </div>
 
-                <div id="encProgressContainer" class="progress-container" style="display: none; margin-top: 24px;">
-                    <div class="progress-label">加密进度: <span id="encProgressText">0%</span></div>
-                    <div class="progress-bar-bg">
-                        <div id="encProgressBar" class="progress-bar-fill"></div>
+                <div id="encSpinnerContainer" class="spinner-container" style="display: none; margin-top: 24px;">
+                    <div class="spinner-border text-primary" role="status">
+                        <span class="visually-hidden">Loading...</span>
                     </div>
+                    <span class="spinner-text">正在加密...</span>
                 </div>
 
                 <div id="encResultContainer" class="conversion-result" style="display: none;">
@@ -711,11 +691,11 @@ document.addEventListener('DOMContentLoaded', () => {
                     <button id="startDecryption"><i class="bi bi-unlock"></i> 开始解密</button>
                 </div>
 
-                <div id="decProgressContainer" class="progress-container" style="display: none; margin-top: 24px;">
-                    <div class="progress-label">解密进度: <span id="decProgressText">0%</span></div>
-                    <div class="progress-bar-bg">
-                        <div id="decProgressBar" class="progress-bar-fill"></div>
+                <div id="decSpinnerContainer" class="spinner-container" style="display: none; margin-top: 24px;">
+                    <div class="spinner-border text-primary" role="status">
+                        <span class="visually-hidden">Loading...</span>
                     </div>
+                    <span class="spinner-text">正在解密...</span>
                 </div>
 
                 <div id="decResultContainer" class="conversion-result" style="display: none;">
@@ -818,15 +798,13 @@ document.addEventListener('DOMContentLoaded', () => {
 
         const startEncryptionBtn = document.getElementById('startEncryption');
         startEncryptionBtn.addEventListener('click', async () => {
-            const encProgressContainer = document.getElementById('encProgressContainer');
             const encResultContainer = document.getElementById('encResultContainer');
-            encProgressContainer.style.display = 'block';
             encResultContainer.style.display = 'none';
-            updateEncryptionProgressBar(0);
+            showEncryptionSpinner(true); // 显示加载器
 
             if (!encFilePath) {
                 showToast('请先选择要加密的文件或文件夹', 'error');
-                encProgressContainer.style.display = 'none';
+                showEncryptionSpinner(false); // 隐藏加载器
                 return;
             }
             const algorithm = document.getElementById('encAlgorithm').value;
@@ -834,7 +812,7 @@ document.addEventListener('DOMContentLoaded', () => {
             const keyFilePath = keyFilePathInput.value;
             if (keyOption === 'file' && !keyFilePath) {
                 showToast('请选择密钥文件', 'error');
-                encProgressContainer.style.display = 'none';
+                showEncryptionSpinner(false); // 隐藏加载器
                 return;
             }
             showToast('正在加密...', 'info');
@@ -851,7 +829,6 @@ document.addEventListener('DOMContentLoaded', () => {
                     const fileInfo = await window.electronAPI.getFileInfo(result.outputPath);
                     const resultContainer = document.getElementById('encResultContainer');
                     if (resultContainer && fileInfo) {
-                        encProgressContainer.style.display = 'none'; // 隐藏进度条
                         resultContainer.innerHTML = `
                             <div class="conversion-success-card">
                                 <div class="success-header">
@@ -879,8 +856,7 @@ document.addEventListener('DOMContentLoaded', () => {
             } catch (error) {
                 showToast(`加密过程中发生错误: ${error.message}`, 'error');
             } finally {
-                encProgressContainer.style.display = 'none';
-                updateEncryptionProgressBar(0);
+                showEncryptionSpinner(false); // 隐藏加载器
             }
         });
     }
@@ -943,22 +919,20 @@ document.addEventListener('DOMContentLoaded', () => {
 
         const startDecryptionBtn = document.getElementById('startDecryption');
         startDecryptionBtn.addEventListener('click', async () => {
-            const decProgressContainer = document.getElementById('decProgressContainer');
             const decResultContainer = document.getElementById('decResultContainer');
-            decProgressContainer.style.display = 'block';
             decResultContainer.style.display = 'none';
-            updateDecryptionProgressBar(0);
+            showDecryptionSpinner(true); // 显示加载器
 
             if (!decFilePath) {
                 showToast('请先选择要解密的文件', 'error');
-                decProgressContainer.style.display = 'none';
+                showDecryptionSpinner(false); // 隐藏加载器
                 return;
             }
             const algorithm = document.getElementById('decAlgorithm').value;
             const keyFilePath = keyFilePathInput.value;
             if (!keyFilePath) {
                 showToast('请选择密钥文件', 'error');
-                decProgressContainer.style.display = 'none';
+                showDecryptionSpinner(false); // 隐藏加载器
                 return;
             }
             showToast('正在解密...', 'info');
@@ -974,7 +948,6 @@ document.addEventListener('DOMContentLoaded', () => {
                     const fileInfo = await window.electronAPI.getFileInfo(result.outputPath);
                     const resultContainer = document.getElementById('decResultContainer');
                     if (resultContainer && fileInfo) {
-                        decProgressContainer.style.display = 'none'; // 隐藏进度条
                         resultContainer.innerHTML = `
                             <div class="conversion-success-card">
                                 <div class="success-header">
@@ -1002,8 +975,7 @@ document.addEventListener('DOMContentLoaded', () => {
             } catch (error) {
                 showToast(`解密过程中发生错误: ${error.message}`, 'error');
             } finally {
-                decProgressContainer.style.display = 'none';
-                updateDecryptionProgressBar(0);
+                showDecryptionSpinner(false); // 隐藏加载器
             }
         });
     }
