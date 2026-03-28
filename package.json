@@ -1,7 +1,7 @@
 {
-  "name": "formattransformer",
+  "name": "transcrypt-pro",
   "version": "1.0.0",
-  "description": "A file format transformer built with Electron.",
+  "description": "A powerful file format transformer and encryption tool built with Electron.",
   "main": "index.js",
   "scripts": {
     "test": "echo \"Error: no test specified\" && exit 1",

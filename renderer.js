@@ -542,13 +542,13 @@ document.addEventListener('DOMContentLoaded', () => {
                     <div class="about-info">
                         <div class="about-logo">🚀</div>
                         <div class="version-tag">Version 1.3.0</div>
-                        <div class="setting-label">文件格式转换器</div>
+                        <div class="setting-label">TransCrypt Pro</div>
                         <div class="setting-description" style="margin-top:12px;">
                             一个基于 Electron 和 FFmpeg 的轻量级开源转换工具。<br>
                             旨在提供极致简洁、高效的多媒体处理体验。
                         </div>
                         <div style="margin-top:20px;">
-                            <a class="action-link" href="https://github.com/leowmx1/FormatTransformer" style="justify-content:center;"><i class="bi bi-github"></i> 检查更新</a>
+                            <a class="action-link" href="https://github.com/leowmx1/transcrypt-pro" style="justify-content:center;"><i class="bi bi-github"></i> 检查更新</a>
                         </div>
                     </div>
                 </div>
