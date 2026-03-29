@@ -736,7 +736,7 @@ document.addEventListener('DOMContentLoaded', () => {
             <h1><i class="bi bi-unlock"></i> 文件解密</h1>
             <div class="operation-container">
                 <div class="form-group">
-                    <label><i class="bi bi-file-earmark-zip"></i> 选择要解密的 .enc 或 .dir.enc 文件:</label>
+                    <label><i class="bi bi-file-earmark-zip"></i> 选择要解密的 .tclock 文件:</label>
                     <div id="decDropZone" class="drop-zone">
                         <div class="drop-zone-content">
                             <div class="drop-zone-icon"><i class="bi bi-file-arrow-down"></i></div>
@@ -754,9 +754,9 @@ document.addEventListener('DOMContentLoaded', () => {
                 </div>
 
                 <div class="form-group">
-                    <label for="keyFilePath"><i class="bi bi-file-earmark-lock"></i> 选择密钥文件:</label>
+                    <label for="keyFilePath"><i class="bi bi-file-earmark-lock"></i> 选择密钥文件 (.tckey):</label>
                     <div class="file-input-container">
-                        <input type="text" id="keyFilePath" placeholder="点击选择密钥文件" readonly>
+                        <input type="text" id="keyFilePath" placeholder="点击选择密钥文件 .tckey" readonly>
                         <button id="selectKeyFileBtn">选择</button>
                     </div>
                 </div>

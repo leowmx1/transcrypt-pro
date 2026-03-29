@@ -6,15 +6,16 @@ const path = require('path');
 const os = require('os');
 const { nativeImage } = require('electron');
 const { Worker } = require('worker_threads');
-const { execSync } = require('child_process');
+const { execSync, execFileSync } = require('child_process');
 const crypto = require('crypto');
-const stream = require('stream');
 const archiver = require('archiver');
 const yauzl = require('yauzl');
 const { createBatchController, runWithConcurrency } = require('./batchConversion');
 
 const IV_LENGTH = 12; // 96 bits for GCM
 const AUTH_TAG_LENGTH = 16; // GCM auth tag
+const ENCRYPTED_FILE_EXTENSION = '.tclock';
+const KEY_FILE_EXTENSION = '.tckey';
 const IMAGE_FILE_FILTERS = [
     { name: '图片文件', extensions: ['jpg', 'jpeg', 'png', 'gif', 'bmp', 'webp'] },
     { name: '所有文件', extensions: ['*'] }
@@ -35,6 +36,55 @@ const ORIGINAL_FORMAT_VALUE = '__original__';
 
 const settingsPath = path.join(app.getPath('userData'), 'settings.json');
 const activeBatchControllers = new Map();
+
+function escapeRegValue(value) {
+    return String(value).replace(/"/g, '\\"');
+}
+
+function runRegAdd(args) {
+    execFileSync('reg', ['add', ...args], { stdio: 'ignore', windowsHide: true });
+}
+
+function ensureShellIconFile(sourcePath, targetName) {
+    try {
+        const iconDir = path.join(app.getPath('userData'), 'file-icons');
+        if (!fs.existsSync(iconDir)) {
+            fs.mkdirSync(iconDir, { recursive: true });
+        }
+        const targetPath = path.join(iconDir, targetName);
+        fs.copyFileSync(sourcePath, targetPath);
+        return targetPath;
+    } catch (error) {
+        return sourcePath;
+    }
+}
+
+function registerCustomFileType(extension, progId, description, iconPath, appPath) {
+    runRegAdd([`HKCU\\Software\\Classes\\.${extension}`, '/ve', '/d', progId, '/f']);
+    runRegAdd([`HKCU\\Software\\Classes\\${progId}`, '/ve', '/d', description, '/f']);
+    runRegAdd([`HKCU\\Software\\Classes\\${progId}\\DefaultIcon`, '/ve', '/d', `${escapeRegValue(iconPath)},0`, '/f']);
+    runRegAdd([`HKCU\\Software\\Classes\\${progId}\\shell\\open\\command`, '/ve', '/d', `\\"${escapeRegValue(appPath)}\\" \\"%1\\"`, '/f']);
+}
+
+function registerWindowsFileAssociations() {
+    if (process.platform !== 'win32') {
+        return;
+    }
+    try {
+        const appPath = process.execPath;
+        const tclockIconSource = path.join(__dirname, 'assets', 'tclock-icon.ico');
+        const tckeyIconSource = path.join(__dirname, 'assets', 'tckey-icon.ico');
+        if (fs.existsSync(tclockIconSource)) {
+            const iconPath = ensureShellIconFile(tclockIconSource, 'tclock-icon.ico');
+            registerCustomFileType('tclock', 'TransCryptPro.tclock', 'TransCrypt Pro Encrypted File', iconPath, appPath);
+        }
+        if (fs.existsSync(tckeyIconSource)) {
+            const iconPath = ensureShellIconFile(tckeyIconSource, 'tckey-icon.ico');
+            registerCustomFileType('tckey', 'TransCryptPro.tckey', 'TransCrypt Pro Key File', iconPath, appPath);
+        }
+    } catch (error) {
+    }
+}
 
 function getFiltersByCategory(category) {
     if (category === 'images') return IMAGE_FILE_FILTERS;
@@ -198,6 +248,7 @@ try {
 }
 
 app.whenReady().then(() => {
+    registerWindowsFileAssociations();
     // 在创建窗口前确保 PNG 图标存在
     ensurePngIcon().then(() => createWindow());
     app.on('activate', () => {
@@ -617,7 +668,11 @@ ipcMain.handle('encrypt-file', async (event, { filePath, algorithm, keyOption, k
             key = crypto.randomBytes(32);
             const result = await dialog.showSaveDialog({
                 title: '保存生成的密钥文件',
-                defaultPath: path.join(app.getPath('downloads'), 'encryption.key')
+                defaultPath: path.join(app.getPath('downloads'), `encryption${KEY_FILE_EXTENSION}`),
+                filters: [
+                    { name: 'TransCrypt 密钥文件', extensions: [KEY_FILE_EXTENSION.replace('.', '')] },
+                    { name: '所有文件', extensions: ['*'] }
+                ]
             });
             if (result.canceled) return { success: false, message: '密钥文件保存已取消' };
             await fsp.writeFile(result.filePath, key);
@@ -629,12 +684,16 @@ ipcMain.handle('encrypt-file', async (event, { filePath, algorithm, keyOption, k
         const stats = await fsp.stat(filePath);
         const isDirectory = stats.isDirectory();
 
-        const outputExt = isDirectory ? '.dir.enc' : '.enc';
+        const outputExt = ENCRYPTED_FILE_EXTENSION;
         const outputFileName = `${path.basename(filePath)}${outputExt}`;
 
         const saveResult = await dialog.showSaveDialog({
             title: '保存加密文件',
-            defaultPath: path.join(path.dirname(filePath), outputFileName)
+            defaultPath: path.join(path.dirname(filePath), outputFileName),
+            filters: [
+                { name: 'TransCrypt 加密文件', extensions: [ENCRYPTED_FILE_EXTENSION.replace('.', '')] },
+                { name: '所有文件', extensions: ['*'] }
+            ]
         });
 
         if (saveResult.canceled) return { success: false, message: '加密文件保存已取消' };
@@ -682,8 +741,14 @@ ipcMain.handle('decrypt-file', async (event, { filePath, algorithm, keyOption, k
             key = await deriveKey(keyFilePath);
         }
 
-        const isDirectory = filePath.endsWith('.dir.enc');
-        const originalName = path.basename(filePath, isDirectory ? '.dir.enc' : '.enc');
+        let originalName = path.basename(filePath);
+        if (originalName.toLowerCase().endsWith(ENCRYPTED_FILE_EXTENSION)) {
+            originalName = originalName.slice(0, -ENCRYPTED_FILE_EXTENSION.length);
+        } else if (originalName.toLowerCase().endsWith('.dir.enc')) {
+            originalName = originalName.slice(0, -('.dir.enc'.length));
+        } else if (originalName.toLowerCase().endsWith('.enc')) {
+            originalName = originalName.slice(0, -('.enc'.length));
+        }
 
         const saveResult = await dialog.showSaveDialog({
             title: '保存解密后的文件/文件夹',
@@ -701,53 +766,47 @@ ipcMain.handle('decrypt-file', async (event, { filePath, algorithm, keyOption, k
 
         const decipher = crypto.createDecipheriv('aes-256-gcm', key, iv, { authTagLength: AUTH_TAG_LENGTH });
         decipher.setAuthTag(authTag);
+        const decryptedBuffer = Buffer.concat([decipher.update(encryptedDataBuffer), decipher.final()]);
+        const isDirectory = await new Promise((resolve) => {
+            yauzl.fromBuffer(decryptedBuffer, { lazyEntries: true }, (err, zipfile) => {
+                if (err || !zipfile) {
+                    resolve(false);
+                    return;
+                }
+                zipfile.close();
+                resolve(true);
+            });
+        });
 
         if (isDirectory) {
-            const tempZipPath = path.join(os.tmpdir(), `${Date.now()}.zip`);
-            const writeStream = fs.createWriteStream(tempZipPath);
-
-            await new Promise((resolve, reject) => {
-                const bufferStream = new stream.PassThrough();
-                bufferStream.end(encryptedDataBuffer);
-                bufferStream.pipe(decipher).pipe(writeStream)
-                    .on('finish', resolve)
-                    .on('error', reject);
-            });
-
             await fsp.mkdir(outputPath, { recursive: true });
             await new Promise((resolve, reject) => {
-                yauzl.open(tempZipPath, { lazyEntries: true }, (err, zipfile) => {
-                    if (err) return reject(err);
+                yauzl.fromBuffer(decryptedBuffer, { lazyEntries: true }, (err, zipfile) => {
+                    if (err || !zipfile) return reject(err || new Error('无法读取目录数据'));
                     zipfile.on('entry', (entry) => {
                         const entryPath = path.join(outputPath, entry.fileName);
-                        if (/\/$/.test(entry.fileName)) { // Directory
+                        if (/\/$/.test(entry.fileName)) {
                             fsp.mkdir(entryPath, { recursive: true }).then(() => zipfile.readEntry()).catch(reject);
-                        } else { // File
-                            zipfile.openReadStream(entry, (err, readStream) => {
-                                if (err) return reject(err);
-                                const writeStream = fs.createWriteStream(entryPath);
-                                readStream.pipe(writeStream)
-                                    .on('finish', () => zipfile.readEntry())
-                                    .on('error', reject);
+                        } else {
+                            zipfile.openReadStream(entry, (streamErr, readStream) => {
+                                if (streamErr || !readStream) return reject(streamErr || new Error('无法读取目录项'));
+                                const dirName = path.dirname(entryPath);
+                                fsp.mkdir(dirName, { recursive: true }).then(() => {
+                                    const writeStream = fs.createWriteStream(entryPath);
+                                    readStream.pipe(writeStream)
+                                        .on('finish', () => zipfile.readEntry())
+                                        .on('error', reject);
+                                }).catch(reject);
                             });
                         }
                     });
-                    zipfile.on('end', () => {
-                        fsp.unlink(tempZipPath).then(resolve).catch(reject);
-                    });
+                    zipfile.on('end', resolve);
+                    zipfile.on('error', reject);
                     zipfile.readEntry();
                 });
             });
-
         } else {
-            const writeStream = fs.createWriteStream(outputPath);
-            const bufferStream = new stream.PassThrough();
-            bufferStream.end(encryptedDataBuffer);
-            await new Promise((resolve, reject) => {
-                bufferStream.pipe(decipher).pipe(writeStream)
-                    .on('finish', resolve)
-                    .on('error', reject);
-            });
+            await fsp.writeFile(outputPath, decryptedBuffer);
         }
 
         return { success: true, outputPath };

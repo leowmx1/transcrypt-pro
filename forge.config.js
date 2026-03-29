@@ -18,6 +18,8 @@ module.exports = {
         manufacturer: 'leowmx', // 会显示在安装程序中
         description: 'A powerful file format transformer and encryption tool built with Electron.', // 应用描述
         icon: '.\\assets\\app-icon.ico',
+        extensions: ['WixUtilExtension'],
+        associateExtensions: '.tclock,.tckey',
         ui: {
            chooseDirectory: true // 是否允许用户选择安装目录
         }
