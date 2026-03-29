@@ -1,12 +1,14 @@
 const { FusesPlugin } = require('@electron-forge/plugin-fuses');
 const { FuseV1Options, FuseVersion } = require('@electron/fuses');
+const path = require('path');
+const appIconPath = path.resolve(__dirname, 'assets', 'app-icon.ico');
 
 module.exports = {
   packagerConfig: {
     asar: {
       unpackDir: "node_modules/{ffmpeg-static,ffprobe-static}"
     },
-    icon: '.\\assets\\app-icon',
+    icon: appIconPath,
     name: 'TransCrypt Pro'
   },
   rebuildConfig: {},
@@ -17,7 +19,7 @@ module.exports = {
         language: 2052, // 中文(简体)的 locale ID
         manufacturer: 'leowmx', // 会显示在安装程序中
         description: 'A powerful file format transformer and encryption tool built with Electron.', // 应用描述
-        icon: '.\\assets\\app-icon.ico',
+        icon: appIconPath,
         extensions: ['WixUtilExtension'],
         associateExtensions: '.tclock,.tckey',
         ui: {

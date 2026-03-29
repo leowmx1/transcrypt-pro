@@ -14,6 +14,8 @@ const { createBatchController, runWithConcurrency } = require('./batchConversion
 
 const IV_LENGTH = 12; // 96 bits for GCM
 const AUTH_TAG_LENGTH = 16; // GCM auth tag
+const ENCRYPTION_MAGIC = Buffer.from('TCLK');
+const ENCRYPTION_VERSION = 1;
 const ENCRYPTED_FILE_EXTENSION = '.tclock';
 const KEY_FILE_EXTENSION = '.tckey';
 const IMAGE_FILE_FILTERS = [
@@ -637,12 +639,79 @@ ipcMain.handle('get-image-dimensions', async (event, filePath) => {
 
 
 // Helper to derive a key from a file or password
-async function deriveKey(keyPath) {
-    const keyMaterial = await fsp.readFile(keyPath);
+function deriveKeyFromMaterial(keyMaterial) {
     return new Promise((resolve, reject) => {
         crypto.scrypt(keyMaterial, 'a-hardcoded-salt-for-key-derivation', 32, (err, derivedKey) => {
             if (err) reject(err);
             resolve(derivedKey);
+        });
+    });
+}
+
+async function deriveKey(keyPath) {
+    const keyMaterial = await fsp.readFile(keyPath);
+    return deriveKeyFromMaterial(keyMaterial);
+}
+
+function decryptAesGcmToBuffer(key, iv, authTag, encryptedDataBuffer) {
+    const decipher = crypto.createDecipheriv('aes-256-gcm', key, iv, { authTagLength: AUTH_TAG_LENGTH });
+    decipher.setAuthTag(authTag);
+    return Buffer.concat([decipher.update(encryptedDataBuffer), decipher.final()]);
+}
+
+function isLikelyZipBuffer(buffer) {
+    return new Promise((resolve) => {
+        yauzl.fromBuffer(buffer, { lazyEntries: true }, (err, zipfile) => {
+            if (err || !zipfile) {
+                resolve(false);
+                return;
+            }
+            let settled = false;
+            const done = (value) => {
+                if (settled) return;
+                settled = true;
+                try {
+                    zipfile.close();
+                } catch (error) {
+                }
+                resolve(value);
+            };
+            zipfile.once('error', () => done(false));
+            zipfile.once('entry', () => done(true));
+            zipfile.once('end', () => done(true));
+            try {
+                zipfile.readEntry();
+            } catch (error) {
+                done(false);
+            }
+        });
+    });
+}
+
+function extractZipBufferToDirectory(zipBuffer, outputPath) {
+    return new Promise((resolve, reject) => {
+        yauzl.fromBuffer(zipBuffer, { lazyEntries: true }, (err, zipfile) => {
+            if (err || !zipfile) return reject(err || new Error('无法读取目录数据'));
+            zipfile.on('entry', (entry) => {
+                const entryPath = path.join(outputPath, entry.fileName);
+                if (/\/$/.test(entry.fileName)) {
+                    fsp.mkdir(entryPath, { recursive: true }).then(() => zipfile.readEntry()).catch(reject);
+                } else {
+                    zipfile.openReadStream(entry, (streamErr, readStream) => {
+                        if (streamErr || !readStream) return reject(streamErr || new Error('无法读取目录项'));
+                        const dirName = path.dirname(entryPath);
+                        fsp.mkdir(dirName, { recursive: true }).then(() => {
+                            const writeStream = fs.createWriteStream(entryPath);
+                            readStream.pipe(writeStream)
+                                .on('finish', () => zipfile.readEntry())
+                                .on('error', reject);
+                        }).catch(reject);
+                    });
+                }
+            });
+            zipfile.on('end', resolve);
+            zipfile.on('error', reject);
+            zipfile.readEntry();
         });
     });
 }
@@ -665,7 +734,7 @@ ipcMain.handle('encrypt-file', async (event, { filePath, algorithm, keyOption, k
     try {
         let key;
         if (keyOption === 'generate') {
-            key = crypto.randomBytes(32);
+            const keyMaterial = crypto.randomBytes(32);
             const result = await dialog.showSaveDialog({
                 title: '保存生成的密钥文件',
                 defaultPath: path.join(app.getPath('downloads'), `encryption${KEY_FILE_EXTENSION}`),
@@ -675,7 +744,8 @@ ipcMain.handle('encrypt-file', async (event, { filePath, algorithm, keyOption, k
                 ]
             });
             if (result.canceled) return { success: false, message: '密钥文件保存已取消' };
-            await fsp.writeFile(result.filePath, key);
+            await fsp.writeFile(result.filePath, keyMaterial);
+            key = await deriveKeyFromMaterial(keyMaterial);
         } else {
             if (!keyFilePath) throw new Error('未提供密钥文件');
             key = await deriveKey(keyFilePath);
@@ -701,9 +771,10 @@ ipcMain.handle('encrypt-file', async (event, { filePath, algorithm, keyOption, k
 
         const iv = crypto.randomBytes(12);
         const cipher = crypto.createCipheriv('aes-256-gcm', key, iv, { authTagLength: 16 });
+        const header = Buffer.concat([ENCRYPTION_MAGIC, Buffer.from([ENCRYPTION_VERSION, isDirectory ? 1 : 0]), iv]);
 
         const writeStream = fs.createWriteStream(outputPath);
-        writeStream.write(iv);
+        writeStream.write(header);
 
         if (isDirectory) {
             const archive = archiver('zip', { zlib: { level: 9 } });
@@ -733,12 +804,17 @@ ipcMain.handle('encrypt-file', async (event, { filePath, algorithm, keyOption, k
 
 ipcMain.handle('decrypt-file', async (event, { filePath, algorithm, keyOption, keyFilePath }) => {
     try {
-        let key;
+        let keyCandidates = [];
         if (keyOption === 'generate') {
             throw new Error('解密时不能生成新密钥');
         } else {
             if (!keyFilePath) throw new Error('未提供密钥文件');
-            key = await deriveKey(keyFilePath);
+            const keyMaterial = await fsp.readFile(keyFilePath);
+            const derivedKey = await deriveKeyFromMaterial(keyMaterial);
+            keyCandidates.push(derivedKey);
+            if (keyMaterial.length === 32 && !derivedKey.equals(keyMaterial)) {
+                keyCandidates.push(keyMaterial);
+            }
         }
 
         let originalName = path.basename(filePath);
@@ -759,52 +835,64 @@ ipcMain.handle('decrypt-file', async (event, { filePath, algorithm, keyOption, k
         const outputPath = saveResult.filePath;
 
         const fileBuffer = fs.readFileSync(filePath); // Read the entire file into a buffer
-
-        const iv = fileBuffer.slice(0, IV_LENGTH);
+        const lowerFileName = path.basename(filePath).toLowerCase();
+        let headerOffset = 0;
+        let modeFlag = null;
+        if (fileBuffer.length >= ENCRYPTION_MAGIC.length + 2 + IV_LENGTH + AUTH_TAG_LENGTH &&
+            fileBuffer.subarray(0, ENCRYPTION_MAGIC.length).equals(ENCRYPTION_MAGIC)) {
+            const version = fileBuffer[ENCRYPTION_MAGIC.length];
+            if (version !== ENCRYPTION_VERSION) {
+                throw new Error(`不支持的加密版本: ${version}`);
+            }
+            modeFlag = fileBuffer[ENCRYPTION_MAGIC.length + 1];
+            headerOffset = ENCRYPTION_MAGIC.length + 2;
+        }
+        if (fileBuffer.length < headerOffset + IV_LENGTH + AUTH_TAG_LENGTH) {
+            throw new Error('加密文件结构无效');
+        }
+        const iv = fileBuffer.slice(headerOffset, headerOffset + IV_LENGTH);
         const authTag = fileBuffer.slice(fileBuffer.length - AUTH_TAG_LENGTH);
-        const encryptedDataBuffer = fileBuffer.slice(IV_LENGTH, fileBuffer.length - AUTH_TAG_LENGTH);
+        const encryptedDataBuffer = fileBuffer.slice(headerOffset + IV_LENGTH, fileBuffer.length - AUTH_TAG_LENGTH);
+        let decryptedBuffer = null;
+        let lastDecryptError = null;
+        for (const candidateKey of keyCandidates) {
+            try {
+                decryptedBuffer = decryptAesGcmToBuffer(candidateKey, iv, authTag, encryptedDataBuffer);
+                lastDecryptError = null;
+                break;
+            } catch (error) {
+                lastDecryptError = error;
+            }
+        }
+        if (!decryptedBuffer) {
+            throw lastDecryptError || new Error('密钥无效或文件已损坏');
+        }
+        let shouldExtractDirectory = false;
+        let allowFallbackToFile = false;
+        if (modeFlag === 1) {
+            shouldExtractDirectory = true;
+        } else if (modeFlag === 0) {
+            shouldExtractDirectory = false;
+        } else if (lowerFileName.endsWith('.dir.enc')) {
+            shouldExtractDirectory = true;
+        } else if (lowerFileName.endsWith('.enc')) {
+            shouldExtractDirectory = false;
+        } else {
+            shouldExtractDirectory = await isLikelyZipBuffer(decryptedBuffer);
+            allowFallbackToFile = true;
+        }
 
-        const decipher = crypto.createDecipheriv('aes-256-gcm', key, iv, { authTagLength: AUTH_TAG_LENGTH });
-        decipher.setAuthTag(authTag);
-        const decryptedBuffer = Buffer.concat([decipher.update(encryptedDataBuffer), decipher.final()]);
-        const isDirectory = await new Promise((resolve) => {
-            yauzl.fromBuffer(decryptedBuffer, { lazyEntries: true }, (err, zipfile) => {
-                if (err || !zipfile) {
-                    resolve(false);
-                    return;
+        if (shouldExtractDirectory) {
+            try {
+                await fsp.mkdir(outputPath, { recursive: true });
+                await extractZipBufferToDirectory(decryptedBuffer, outputPath);
+            } catch (error) {
+                if (!allowFallbackToFile) {
+                    throw error;
                 }
-                zipfile.close();
-                resolve(true);
-            });
-        });
-
-        if (isDirectory) {
-            await fsp.mkdir(outputPath, { recursive: true });
-            await new Promise((resolve, reject) => {
-                yauzl.fromBuffer(decryptedBuffer, { lazyEntries: true }, (err, zipfile) => {
-                    if (err || !zipfile) return reject(err || new Error('无法读取目录数据'));
-                    zipfile.on('entry', (entry) => {
-                        const entryPath = path.join(outputPath, entry.fileName);
-                        if (/\/$/.test(entry.fileName)) {
-                            fsp.mkdir(entryPath, { recursive: true }).then(() => zipfile.readEntry()).catch(reject);
-                        } else {
-                            zipfile.openReadStream(entry, (streamErr, readStream) => {
-                                if (streamErr || !readStream) return reject(streamErr || new Error('无法读取目录项'));
-                                const dirName = path.dirname(entryPath);
-                                fsp.mkdir(dirName, { recursive: true }).then(() => {
-                                    const writeStream = fs.createWriteStream(entryPath);
-                                    readStream.pipe(writeStream)
-                                        .on('finish', () => zipfile.readEntry())
-                                        .on('error', reject);
-                                }).catch(reject);
-                            });
-                        }
-                    });
-                    zipfile.on('end', resolve);
-                    zipfile.on('error', reject);
-                    zipfile.readEntry();
-                });
-            });
+                await fsp.rm(outputPath, { recursive: true, force: true });
+                await fsp.writeFile(outputPath, decryptedBuffer);
+            }
         } else {
             await fsp.writeFile(outputPath, decryptedBuffer);
         }
