@@ -317,11 +317,13 @@ body {
 
 .form-group select,
 .setting-item select,
-.form-group input[type="text"] {
+.form-group input[type="text"],
+.form-group input[type="password"] {
     max-width: 400px;
 }
 
-.form-group input[type="text"] {
+.form-group input[type="text"],
+.form-group input[type="password"] {
     width: 100%;
     padding: 12px 16px;
     border: 1px solid var(--border-color);
@@ -334,13 +336,15 @@ body {
     box-shadow: var(--shadow-sm);
 }
 
-.form-group input[type="text"]:hover {
+.form-group input[type="text"]:hover,
+.form-group input[type="password"]:hover {
     border-color: var(--primary-color);
     background-color: #fff;
     box-shadow: var(--shadow-md);
 }
 
-.form-group input[type="text"]:focus {
+.form-group input[type="text"]:focus,
+.form-group input[type="password"]:focus {
     border-color: var(--primary-color);
     box-shadow: 0 0 0 3px var(--primary-light);
 }

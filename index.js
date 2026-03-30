@@ -805,6 +805,10 @@ async function deriveKey(keyPath) {
     return deriveKeyFromMaterial(keyMaterial);
 }
 
+function deriveKeyFromPassword(password) {
+    return deriveKeyFromMaterial(Buffer.from(password, 'utf8'));
+}
+
 function decryptAesGcmToBuffer(key, iv, authTag, encryptedDataBuffer) {
     const decipher = crypto.createDecipheriv('aes-256-gcm', key, iv, { authTagLength: AUTH_TAG_LENGTH });
     decipher.setAuthTag(authTag);
@@ -882,7 +886,7 @@ async function getDirectoryAsBuffer(dirPath) {
     });
 }
 
-ipcMain.handle('encrypt-file', async (event, { filePath, algorithm, keyOption, keyFilePath }) => {
+ipcMain.handle('encrypt-file', async (event, { filePath, algorithm, keyOption, keyFilePath, password }) => {
     try {
         let key;
         if (keyOption === 'generate') {
@@ -898,6 +902,11 @@ ipcMain.handle('encrypt-file', async (event, { filePath, algorithm, keyOption, k
             if (result.canceled) return { success: false, message: '密钥文件保存已取消' };
             await fsp.writeFile(result.filePath, keyMaterial);
             key = await deriveKeyFromMaterial(keyMaterial);
+        } else if (keyOption === 'password') {
+            if (typeof password !== 'string' || password.length === 0) {
+                throw new Error('未提供密码');
+            }
+            key = await deriveKeyFromPassword(password);
         } else {
             if (!keyFilePath) throw new Error('未提供密钥文件');
             key = await deriveKey(keyFilePath);
@@ -954,12 +963,18 @@ ipcMain.handle('encrypt-file', async (event, { filePath, algorithm, keyOption, k
     }
 });
 
-ipcMain.handle('decrypt-file', async (event, { filePath, algorithm, keyOption, keyFilePath }) => {
+ipcMain.handle('decrypt-file', async (event, { filePath, algorithm, keyOption, keyFilePath, password }) => {
     try {
+        const resolvedKeyOption = keyOption || 'file';
         let keyCandidates = [];
-        if (keyOption === 'generate') {
+        if (resolvedKeyOption === 'generate') {
             throw new Error('解密时不能生成新密钥');
-        } else {
+        } else if (resolvedKeyOption === 'password') {
+            if (typeof password !== 'string' || password.length === 0) {
+                throw new Error('未提供密码');
+            }
+            keyCandidates.push(await deriveKeyFromPassword(password));
+        } else if (resolvedKeyOption === 'file') {
             if (!keyFilePath) throw new Error('未提供密钥文件');
             const keyMaterial = await fsp.readFile(keyFilePath);
             const derivedKey = await deriveKeyFromMaterial(keyMaterial);
@@ -967,6 +982,8 @@ ipcMain.handle('decrypt-file', async (event, { filePath, algorithm, keyOption, k
             if (keyMaterial.length === 32 && !derivedKey.equals(keyMaterial)) {
                 keyCandidates.push(keyMaterial);
             }
+        } else {
+            throw new Error('不支持的密钥选项');
         }
 
         let originalName = path.basename(filePath);

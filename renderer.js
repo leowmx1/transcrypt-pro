@@ -790,6 +790,7 @@ document.addEventListener('DOMContentLoaded', () => {
                     <label><i class="bi bi-key"></i> 密钥选项:</label>
                     <div class="radio-group">
                         <label><input type="radio" name="keyOption" value="file" checked> 使用密钥文件</label>
+                        <label><input type="radio" name="keyOption" value="password"> 使用密码</label>
                         <label><input type="radio" name="keyOption" value="generate"> 随机生成密钥</label>
                     </div>
                 </div>
@@ -808,6 +809,14 @@ document.addEventListener('DOMContentLoaded', () => {
                 <div id="generateKeyGroup" style="display: none;">
                     <div class="form-group">
                        <div class="setting-description">将随机生成一个密钥文件，请务必妥善保存它，否则文件将无法解密。</div>
+                    </div>
+                </div>
+
+                <div id="passwordKeyGroup" style="display: none;">
+                    <div class="form-group">
+                        <label for="passwordKeyInput"><i class="bi bi-shield-lock"></i> 输入密码:</label>
+                        <input type="password" id="passwordKeyInput" placeholder="请输入加密密码">
+                        <div class="setting-description">请牢记该密码，解密时需使用相同密码。</div>
                     </div>
                 </div>
 
@@ -862,10 +871,27 @@ document.addEventListener('DOMContentLoaded', () => {
                 </div>
 
                 <div class="form-group">
-                    <label for="keyFilePath"><i class="bi bi-file-earmark-lock"></i> 选择密钥文件 (.tckey):</label>
-                    <div class="file-input-container">
-                        <input type="text" id="keyFilePath" placeholder="点击选择密钥文件 .tckey" readonly>
-                        <button id="selectKeyFileBtn">选择</button>
+                    <label><i class="bi bi-key"></i> 解密密钥选项:</label>
+                    <div class="radio-group">
+                        <label><input type="radio" name="decKeyOption" value="file" checked> 使用密钥文件</label>
+                        <label><input type="radio" name="decKeyOption" value="password"> 使用密码</label>
+                    </div>
+                </div>
+
+                <div id="decKeyFileGroup">
+                    <div class="form-group">
+                        <label for="keyFilePath"><i class="bi bi-file-earmark-lock"></i> 选择密钥文件 (.tckey):</label>
+                        <div class="file-input-container">
+                            <input type="text" id="keyFilePath" placeholder="点击选择密钥文件 .tckey" readonly>
+                            <button id="selectKeyFileBtn">选择</button>
+                        </div>
+                    </div>
+                </div>
+
+                <div id="decPasswordKeyGroup" style="display: none;">
+                    <div class="form-group">
+                        <label for="decPasswordKeyInput"><i class="bi bi-shield-lock"></i> 输入解密密码:</label>
+                        <input type="password" id="decPasswordKeyInput" placeholder="请输入解密密码">
                     </div>
                 </div>
 
@@ -958,6 +984,8 @@ document.addEventListener('DOMContentLoaded', () => {
         const keyOptionRadios = document.querySelectorAll('input[name="keyOption"]');
         const keyFileGroup = document.getElementById('keyFileGroup');
         const generateKeyGroup = document.getElementById('generateKeyGroup');
+        const passwordKeyGroup = document.getElementById('passwordKeyGroup');
+        const passwordKeyInput = document.getElementById('passwordKeyInput');
         let encFilePath = null;
 
         keyOptionRadios.forEach(radio => {
@@ -965,9 +993,15 @@ document.addEventListener('DOMContentLoaded', () => {
                 if (radio.value === 'file') {
                     keyFileGroup.style.display = 'block';
                     generateKeyGroup.style.display = 'none';
-                } else {
+                    passwordKeyGroup.style.display = 'none';
+                } else if (radio.value === 'generate') {
                     keyFileGroup.style.display = 'none';
                     generateKeyGroup.style.display = 'block';
+                    passwordKeyGroup.style.display = 'none';
+                } else {
+                    keyFileGroup.style.display = 'none';
+                    generateKeyGroup.style.display = 'none';
+                    passwordKeyGroup.style.display = 'block';
                 }
             });
         });
@@ -1060,8 +1094,14 @@ document.addEventListener('DOMContentLoaded', () => {
             const algorithm = document.getElementById('encAlgorithm').value;
             const keyOption = document.querySelector('input[name="keyOption"]:checked').value;
             const keyFilePath = keyFilePathInput.value;
+            const password = passwordKeyInput ? passwordKeyInput.value : '';
             if (keyOption === 'file' && !keyFilePath) {
                 showToast('请选择密钥文件', 'error');
+                showEncryptionSpinner(false); // 隐藏加载器
+                return;
+            }
+            if (keyOption === 'password' && !password) {
+                showToast('请输入加密密码', 'error');
                 showEncryptionSpinner(false); // 隐藏加载器
                 return;
             }
@@ -1071,7 +1111,8 @@ document.addEventListener('DOMContentLoaded', () => {
                     filePath: encFilePath, 
                     algorithm, 
                     keyOption, 
-                    keyFilePath
+                    keyFilePath,
+                    password
                 });
                 if (result.success) {
                     showToast(`加密成功！文件保存在: ${result.outputPath}`, 'success');
@@ -1121,6 +1162,10 @@ document.addEventListener('DOMContentLoaded', () => {
         let decFilePath = null;
         const decDropZone = document.getElementById('decDropZone');
         const decSelectedFileName = document.getElementById('decSelectedFileName');
+        const decKeyOptionRadios = document.querySelectorAll('input[name="decKeyOption"]');
+        const decKeyFileGroup = document.getElementById('decKeyFileGroup');
+        const decPasswordKeyGroup = document.getElementById('decPasswordKeyGroup');
+        const decPasswordKeyInput = document.getElementById('decPasswordKeyInput');
         const applyPendingDecryptionFile = () => {
             const pendingPath = document.body.dataset.pendingDecryptionFilePath;
             if (!pendingPath) {
@@ -1176,6 +1221,17 @@ document.addEventListener('DOMContentLoaded', () => {
 
         const selectKeyFileBtn = document.getElementById('selectKeyFileBtn');
         const keyFilePathInput = document.getElementById('keyFilePath');
+        decKeyOptionRadios.forEach(radio => {
+            radio.addEventListener('change', () => {
+                if (radio.value === 'password') {
+                    decKeyFileGroup.style.display = 'none';
+                    decPasswordKeyGroup.style.display = 'block';
+                } else {
+                    decKeyFileGroup.style.display = 'block';
+                    decPasswordKeyGroup.style.display = 'none';
+                }
+            });
+        });
 
         selectKeyFileBtn.addEventListener('click', async () => {
             const result = await window.electronAPI.selectPath(['openFile']);
@@ -1196,9 +1252,16 @@ document.addEventListener('DOMContentLoaded', () => {
                 return;
             }
             const algorithm = document.getElementById('decAlgorithm').value;
+            const keyOption = document.querySelector('input[name="decKeyOption"]:checked').value;
             const keyFilePath = keyFilePathInput.value;
-            if (!keyFilePath) {
+            const password = decPasswordKeyInput ? decPasswordKeyInput.value : '';
+            if (keyOption === 'file' && !keyFilePath) {
                 showToast('请选择密钥文件', 'error');
+                showDecryptionSpinner(false); // 隐藏加载器
+                return;
+            }
+            if (keyOption === 'password' && !password) {
+                showToast('请输入解密密码', 'error');
                 showDecryptionSpinner(false); // 隐藏加载器
                 return;
             }
@@ -1207,7 +1270,9 @@ document.addEventListener('DOMContentLoaded', () => {
                 const result = await window.electronAPI.decryptFile({ 
                     filePath: decFilePath, 
                     algorithm, 
-                    keyFilePath 
+                    keyOption,
+                    keyFilePath,
+                    password
                 });
                 if (result.success) {
                     showToast(`解密成功！文件保存在: ${result.outputPath}`, 'success');
