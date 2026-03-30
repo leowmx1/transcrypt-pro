@@ -18,6 +18,13 @@ const ENCRYPTION_MAGIC = Buffer.from('TCLK');
 const ENCRYPTION_VERSION = 1;
 const ENCRYPTED_FILE_EXTENSION = '.tclock';
 const KEY_FILE_EXTENSION = '.tckey';
+
+// Self-decrypt exe container footer format (Windows-only feature)
+// [template][encrypted(tclock bytes)][name bytes][encLen(8)][nameLen(2)][version(1)][magic(4)]
+const SELF_DECRYPT_EXE_MAGIC = Buffer.from('TCDX'); // container marker
+const SELF_DECRYPT_EXE_VERSION = 1;
+const SELF_DECRYPT_EXE_TEMPLATE_FILENAME = 'decryptor-template-win32.exe';
+const SELF_DECRYPT_EXE_TAIL_LENGTH = 8 + 2 + 1 + 4; // encLen + nameLen + version + magic
 const IMAGE_FILE_FILTERS = [
     { name: '图片文件', extensions: ['jpg', 'jpeg', 'png', 'gif', 'bmp', 'webp'] },
     { name: '所有文件', extensions: ['*'] }
@@ -886,10 +893,75 @@ async function getDirectoryAsBuffer(dirPath) {
     });
 }
 
-ipcMain.handle('encrypt-file', async (event, { filePath, algorithm, keyOption, keyFilePath, password }) => {
+function getSelfDecryptExeTemplatePath() {
+    const local = path.join(__dirname, 'assets', SELF_DECRYPT_EXE_TEMPLATE_FILENAME);
+    if (fs.existsSync(local)) return local;
+    return null;
+}
+
+async function buildSelfDecryptExeFromTemplate({ templatePath, encryptedFilePath, outputExePath, originalName }) {
+    const nameBytes = Buffer.from(originalName, 'utf8');
+    if (nameBytes.length > 0xffff) {
+        throw new Error('文件名过长，无法写入自解密尾部元数据');
+    }
+
+    const encStat = await fsp.stat(encryptedFilePath);
+    const encLenBig = BigInt(encStat.size);
+    if (encLenBig > BigInt(Number.MAX_SAFE_INTEGER)) {
+        throw new Error('加密内容过大，超过自解密容器支持范围');
+    }
+
+    const tail = Buffer.alloc(SELF_DECRYPT_EXE_TAIL_LENGTH);
+    // encLen(8)
+    tail.writeBigUInt64LE(encLenBig, 0);
+    // nameLen(2)
+    tail.writeUInt16LE(nameBytes.length, 8);
+    // version(1)
+    tail.writeUInt8(SELF_DECRYPT_EXE_VERSION, 10);
+    // magic(4)
+    SELF_DECRYPT_EXE_MAGIC.copy(tail, 11);
+
+    // 1) copy template
+    await fsp.copyFile(templatePath, outputExePath);
+
+    // 2) append encrypted bytes + name + tail
+    await new Promise((resolve, reject) => {
+        const outStream = fs.createWriteStream(outputExePath, { flags: 'a' });
+        const encStream = fs.createReadStream(encryptedFilePath);
+
+        const onError = (err) => {
+            try { encStream.destroy(); } catch (e) { }
+            try { outStream.destroy(); } catch (e) { }
+            reject(err);
+        };
+
+        outStream.on('error', onError);
+        encStream.on('error', onError);
+
+        outStream.on('finish', resolve);
+
+        encStream.pipe(outStream, { end: false });
+        encStream.on('end', () => {
+            outStream.write(nameBytes);
+            outStream.end(tail);
+        });
+    });
+}
+
+ipcMain.handle('encrypt-file', async (event, { filePath, algorithm, keyOption, keyFilePath, password, outputOption }) => {
     try {
+        const resolvedOutputOption = outputOption || 'tclock';
+
         let key;
-        if (keyOption === 'generate') {
+        if (resolvedOutputOption === 'exe') {
+            if (keyOption !== 'password') {
+                throw new Error('自解密 exe 模式仅支持密码');
+            }
+            if (typeof password !== 'string' || password.length === 0) {
+                throw new Error('未提供密码');
+            }
+            key = await deriveKeyFromPassword(password);
+        } else if (keyOption === 'generate') {
             const keyMaterial = crypto.randomBytes(32);
             const result = await dialog.showSaveDialog({
                 title: '保存生成的密钥文件',
@@ -915,8 +987,81 @@ ipcMain.handle('encrypt-file', async (event, { filePath, algorithm, keyOption, k
         const stats = await fsp.stat(filePath);
         const isDirectory = stats.isDirectory();
 
+        const originalName = path.basename(filePath);
+
+        const iv = crypto.randomBytes(12);
+        const cipher = crypto.createCipheriv('aes-256-gcm', key, iv, { authTagLength: 16 });
+        const header = Buffer.concat([ENCRYPTION_MAGIC, Buffer.from([ENCRYPTION_VERSION, isDirectory ? 1 : 0]), iv]);
+
+        // exe mode: encrypt to temp tclock first, then append into decryptor template exe.
+        let outputPath = null;
+        let tempEncryptedPath = null;
+        if (resolvedOutputOption === 'exe') {
+            const templatePath = getSelfDecryptExeTemplatePath();
+            if (!templatePath) {
+                throw new Error(
+                    `缺少自解密 exe 模板文件：assets/${SELF_DECRYPT_EXE_TEMPLATE_FILENAME}。\n` +
+                    `请先构建并放入该文件，然后再在本应用里选择“生成自解密 exe”。`
+                );
+            }
+
+            const tempDir = path.join(os.tmpdir(), 'TransCryptProSelfDecrypt');
+            await fsp.mkdir(tempDir, { recursive: true });
+            tempEncryptedPath = path.join(
+                tempDir,
+                `${originalName}-${Date.now()}-${Math.random().toString(16).slice(2)}${ENCRYPTED_FILE_EXTENSION}`
+            );
+
+            try {
+                const saveExeResult = await dialog.showSaveDialog({
+                    title: '保存自解密 exe',
+                    defaultPath: path.join(path.dirname(filePath), `${originalName}-decrypt.exe`),
+                    filters: [{ name: 'Windows 可执行文件', extensions: ['exe'] }],
+                });
+                if (saveExeResult.canceled) {
+                    return { success: false, message: '自解密 exe 保存已取消' };
+                }
+                outputPath = saveExeResult.filePath;
+
+                const writeStream = fs.createWriteStream(tempEncryptedPath);
+                writeStream.write(header);
+                if (isDirectory) {
+                    const archive = archiver('zip', { zlib: { level: 9 } });
+                    archive.pipe(cipher).pipe(writeStream);
+                    archive.directory(filePath, false);
+                    await archive.finalize();
+                } else {
+                    const readStream = fs.createReadStream(filePath);
+                    readStream.pipe(cipher).pipe(writeStream);
+                }
+
+                await new Promise((resolve, reject) => {
+                    writeStream.on('finish', () => {
+                        const authTag = cipher.getAuthTag();
+                        fs.appendFileSync(tempEncryptedPath, authTag);
+                        resolve();
+                    });
+                    writeStream.on('error', reject);
+                });
+
+                await buildSelfDecryptExeFromTemplate({
+                    templatePath,
+                    encryptedFilePath: tempEncryptedPath,
+                    outputExePath: outputPath,
+                    originalName
+                });
+
+                return { success: true, outputPath };
+            } finally {
+                if (tempEncryptedPath) {
+                    await fsp.rm(tempEncryptedPath, { force: true });
+                }
+            }
+        }
+
+        // tclock mode (existing behavior)
         const outputExt = ENCRYPTED_FILE_EXTENSION;
-        const outputFileName = `${path.basename(filePath)}${outputExt}`;
+        const outputFileName = `${originalName}${outputExt}`;
 
         const saveResult = await dialog.showSaveDialog({
             title: '保存加密文件',
@@ -928,11 +1073,7 @@ ipcMain.handle('encrypt-file', async (event, { filePath, algorithm, keyOption, k
         });
 
         if (saveResult.canceled) return { success: false, message: '加密文件保存已取消' };
-        const outputPath = saveResult.filePath;
-
-        const iv = crypto.randomBytes(12);
-        const cipher = crypto.createCipheriv('aes-256-gcm', key, iv, { authTagLength: 16 });
-        const header = Buffer.concat([ENCRYPTION_MAGIC, Buffer.from([ENCRYPTION_VERSION, isDirectory ? 1 : 0]), iv]);
+        outputPath = saveResult.filePath;
 
         const writeStream = fs.createWriteStream(outputPath);
         writeStream.write(header);

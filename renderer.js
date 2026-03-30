@@ -893,6 +893,15 @@ document.addEventListener('DOMContentLoaded', () => {
                 </div>
 
                 <div class="form-group">
+                    <label><i class="bi bi-file-earmark-play"></i> 输出类型:</label>
+                    <div class="radio-group">
+                        <label><input type="radio" name="outputOption" value="tclock" checked> 生成 .tclock 文件</label>
+                        <label><input type="radio" name="outputOption" value="exe"> 生成自解密 exe</label>
+                    </div>
+                    <div class="setting-description">自解密 exe 模式仅支持密码输入（不需要密钥文件 .tckey）。</div>
+                </div>
+
+                <div class="form-group">
                     <label><i class="bi bi-key"></i> 密钥选项:</label>
                     <div class="radio-group">
                         <label><input type="radio" name="keyOption" value="file" checked> 使用密钥文件</label>
@@ -1088,14 +1097,48 @@ document.addEventListener('DOMContentLoaded', () => {
 
     function bindEncryptionEvents() {
         const keyOptionRadios = document.querySelectorAll('input[name="keyOption"]');
+        const outputOptionRadios = document.querySelectorAll('input[name="outputOption"]');
         const keyFileGroup = document.getElementById('keyFileGroup');
         const generateKeyGroup = document.getElementById('generateKeyGroup');
         const passwordKeyGroup = document.getElementById('passwordKeyGroup');
         const passwordKeyInput = document.getElementById('passwordKeyInput');
         let encFilePath = null;
 
+        const applyOutputOptionUI = () => {
+            const outputOption = document.querySelector('input[name="outputOption"]:checked')?.value || 'tclock';
+            if (outputOption === 'exe') {
+                // exe 模式仅支持密码派生密钥
+                keyOptionRadios.forEach(radio => {
+                    radio.disabled = radio.value !== 'password';
+                    if (radio.value === 'password') radio.checked = true;
+                });
+                keyFileGroup.style.display = 'none';
+                generateKeyGroup.style.display = 'none';
+                passwordKeyGroup.style.display = 'block';
+                return;
+            }
+
+            keyOptionRadios.forEach(radio => (radio.disabled = false));
+            const keyOption = document.querySelector('input[name="keyOption"]:checked')?.value || 'file';
+            if (keyOption === 'file') {
+                keyFileGroup.style.display = 'block';
+                generateKeyGroup.style.display = 'none';
+                passwordKeyGroup.style.display = 'none';
+            } else if (keyOption === 'generate') {
+                keyFileGroup.style.display = 'none';
+                generateKeyGroup.style.display = 'block';
+                passwordKeyGroup.style.display = 'none';
+            } else {
+                keyFileGroup.style.display = 'none';
+                generateKeyGroup.style.display = 'none';
+                passwordKeyGroup.style.display = 'block';
+            }
+        };
+
         keyOptionRadios.forEach(radio => {
             radio.addEventListener('change', () => {
+                const outputOption = document.querySelector('input[name="outputOption"]:checked')?.value || 'tclock';
+                if (outputOption === 'exe') return;
                 if (radio.value === 'file') {
                     keyFileGroup.style.display = 'block';
                     generateKeyGroup.style.display = 'none';
@@ -1111,6 +1154,11 @@ document.addEventListener('DOMContentLoaded', () => {
                 }
             });
         });
+
+        outputOptionRadios.forEach(radio => {
+            radio.addEventListener('change', applyOutputOptionUI);
+        });
+        applyOutputOptionUI();
 
         const encDropZone = document.getElementById('encDropZone');
         const encSelectedFileName = document.getElementById('encSelectedFileName');
@@ -1196,9 +1244,14 @@ document.addEventListener('DOMContentLoaded', () => {
                 return;
             }
             const algorithm = document.getElementById('encAlgorithm').value;
+            const outputOption = document.querySelector('input[name="outputOption"]:checked').value;
             const keyOption = document.querySelector('input[name="keyOption"]:checked').value;
             const keyFilePath = keyFilePathInput.value;
             const password = passwordKeyInput ? passwordKeyInput.value : '';
+            if (outputOption === 'exe' && keyOption !== 'password') {
+                showToast('自解密 exe 模式仅支持密码', 'error');
+                return;
+            }
             if (keyOption === 'file' && !keyFilePath) {
                 showToast('请选择密钥文件', 'error');
                 return;
@@ -1216,7 +1269,8 @@ document.addEventListener('DOMContentLoaded', () => {
                     algorithm, 
                     keyOption, 
                     keyFilePath,
-                    password
+                    password,
+                    outputOption
                 });
                 if (result.success) {
                     showToast(`加密成功！文件保存在: ${result.outputPath}`, 'success');
