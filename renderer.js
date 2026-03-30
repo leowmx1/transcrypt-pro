@@ -374,6 +374,36 @@ document.addEventListener('DOMContentLoaded', () => {
         total: 0
     };
 
+    function extractFileName(filePath) {
+        if (!filePath || typeof filePath !== 'string') {
+            return '';
+        }
+        const segments = filePath.split(/[\\/]/);
+        return segments[segments.length - 1] || filePath;
+    }
+
+    function openEncryptedFileInDecryption(filePath, showSwitchToast = true) {
+        if (!filePath || typeof filePath !== 'string') {
+            return;
+        }
+        const normalizedPath = filePath.trim();
+        if (!normalizedPath.toLowerCase().endsWith('.tclock')) {
+            return;
+        }
+        document.body.dataset.pendingDecryptionFilePath = normalizedPath;
+        document.body.dataset.pendingDecryptionFileName = extractFileName(normalizedPath);
+        const decryptionButton = Array.from(sidebarButtons).find(
+            btn => btn.getAttribute('data-category') === 'decryption'
+        );
+        if (!decryptionButton) {
+            return;
+        }
+        if (showSwitchToast && currentCategory !== 'decryption') {
+            showToast('已检测到加密文件，正在跳转到解密页面', 'info', 3000);
+        }
+        decryptionButton.click();
+    }
+
     function updateProgressBar(value) {
         const progressBar = document.getElementById('progressBar');
         const progressText = document.getElementById('progressText');
@@ -465,16 +495,25 @@ document.addEventListener('DOMContentLoaded', () => {
     // 侧边栏按钮点击事件
     sidebarButtons.forEach(button => {
         button.addEventListener('click', (event) => {
-            const category = event.target.getAttribute('data-category');
+            const category = event.currentTarget.getAttribute('data-category');
             currentCategory = category;
             
             // 移除所有按钮的active类
             sidebarButtons.forEach(btn => btn.classList.remove('active'));
             // 给选中的按钮添加active类
-            event.target.classList.add('active');
+            event.currentTarget.classList.add('active');
             
             loadContent(category);
         });
+    });
+
+    window.electronAPI.onOpenEncryptedFile((filePath) => {
+        openEncryptedFileInDecryption(filePath, true);
+    });
+    window.electronAPI.consumePendingOpenEncryptedFile().then((filePath) => {
+        if (filePath) {
+            openEncryptedFileInDecryption(filePath, false);
+        }
     });
 
     // 欢迎页的文件输入：支持自动跳转到检测到的分类
@@ -1000,6 +1039,17 @@ document.addEventListener('DOMContentLoaded', () => {
         let decFilePath = null;
         const decDropZone = document.getElementById('decDropZone');
         const decSelectedFileName = document.getElementById('decSelectedFileName');
+        const applyPendingDecryptionFile = () => {
+            const pendingPath = document.body.dataset.pendingDecryptionFilePath;
+            if (!pendingPath) {
+                return;
+            }
+            const pendingName = document.body.dataset.pendingDecryptionFileName || extractFileName(pendingPath);
+            decFilePath = pendingPath;
+            decSelectedFileName.textContent = `✓ 已选择: ${pendingName}`;
+            delete document.body.dataset.pendingDecryptionFilePath;
+            delete document.body.dataset.pendingDecryptionFileName;
+        };
 
         decDropZone.addEventListener('click', async () => {
             const result = await window.electronAPI.selectPath(['openFile']);
@@ -1117,6 +1167,8 @@ document.addEventListener('DOMContentLoaded', () => {
                 showDecryptionSpinner(false); // 隐藏加载器
             }
         });
+
+        applyPendingDecryptionFile();
     }
 
     function bindFileHashEvents() {

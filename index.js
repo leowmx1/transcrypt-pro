@@ -38,6 +38,52 @@ const ORIGINAL_FORMAT_VALUE = '__original__';
 
 const settingsPath = path.join(app.getPath('userData'), 'settings.json');
 const activeBatchControllers = new Map();
+let mainWindow = null;
+let pendingOpenEncryptedFilePath = null;
+
+function isEncryptedFilePath(filePath) {
+    return typeof filePath === 'string' && filePath.toLowerCase().endsWith(ENCRYPTED_FILE_EXTENSION);
+}
+
+function extractEncryptedFilePathFromArgs(argv) {
+    if (!Array.isArray(argv)) {
+        return null;
+    }
+    for (const rawArg of argv) {
+        if (typeof rawArg !== 'string') {
+            continue;
+        }
+        const arg = rawArg.trim().replace(/^"(.*)"$/, '$1');
+        if (!arg || arg.startsWith('-')) {
+            continue;
+        }
+        if (!isEncryptedFilePath(arg)) {
+            continue;
+        }
+        const resolvedPath = path.resolve(arg);
+        if (fs.existsSync(resolvedPath)) {
+            return resolvedPath;
+        }
+    }
+    return null;
+}
+
+function focusMainWindow() {
+    if (!mainWindow || mainWindow.isDestroyed()) {
+        return;
+    }
+    if (mainWindow.isMinimized()) {
+        mainWindow.restore();
+    }
+    mainWindow.focus();
+}
+
+function notifyRendererOpenEncryptedFile(filePath) {
+    if (!filePath || !mainWindow || mainWindow.isDestroyed()) {
+        return;
+    }
+    mainWindow.webContents.send('open-encrypted-file', filePath);
+}
 
 function escapeRegValue(value) {
     return String(value).replace(/"/g, '\\"');
@@ -203,7 +249,7 @@ async function ensurePngIcon() {
 }
 
 const createWindow = () => {
-    const win = new BrowserWindow({
+    mainWindow = new BrowserWindow({
         width: 1000,
         height: 750,
         webPreferences: {
@@ -213,7 +259,15 @@ const createWindow = () => {
             preload: path.join(__dirname, 'preload.js')
         }
     });
-    win.loadFile('index.html');
+    mainWindow.loadFile('index.html');
+    mainWindow.webContents.on('did-finish-load', () => {
+        if (pendingOpenEncryptedFilePath) {
+            notifyRendererOpenEncryptedFile(pendingOpenEncryptedFilePath);
+        }
+    });
+    mainWindow.on('closed', () => {
+        mainWindow = null;
+    });
     // win.webContents.on('did-finish-load', () => {
     //     // 再次检查 win 对象是否仍然有效
     //     if (!win || win.isDestroyed()) {
@@ -248,6 +302,36 @@ try {
 } catch (e) {
     console.log('设置应用图标失败:', e.message);
 }
+
+if (process.platform !== 'darwin') {
+    pendingOpenEncryptedFilePath = extractEncryptedFilePathFromArgs(process.argv);
+}
+
+const gotTheLock = app.requestSingleInstanceLock();
+if (!gotTheLock) {
+    app.quit();
+} else {
+    app.on('second-instance', (_event, commandLine) => {
+        const openedFilePath = extractEncryptedFilePathFromArgs(commandLine);
+        if (openedFilePath) {
+            pendingOpenEncryptedFilePath = openedFilePath;
+            notifyRendererOpenEncryptedFile(openedFilePath);
+        }
+        focusMainWindow();
+    });
+}
+
+app.on('open-file', (event, filePath) => {
+    event.preventDefault();
+    if (!isEncryptedFilePath(filePath)) {
+        return;
+    }
+    pendingOpenEncryptedFilePath = path.resolve(filePath);
+    if (app.isReady()) {
+        notifyRendererOpenEncryptedFile(pendingOpenEncryptedFilePath);
+        focusMainWindow();
+    }
+});
 
 app.whenReady().then(() => {
     registerWindowsFileAssociations();
@@ -289,6 +373,12 @@ ipcMain.handle('select-file', async (event, { category }) => {
             message: `选择文件失败: ${error.message}` 
         };
     }
+});
+
+ipcMain.handle('consume-pending-open-encrypted-file', async () => {
+    const filePath = pendingOpenEncryptedFilePath;
+    pendingOpenEncryptedFilePath = null;
+    return filePath || null;
 });
 
 ipcMain.handle('select-files', async (event, { category }) => {
