@@ -120,6 +120,57 @@ function showConfirm(title, message, confirmText = '确定', cancelText = '取�
     });
 }
 
+function showOperationResultPage({ title, subtitle = '', contentHtml = '', status = 'success', actionBindings = [] }) {
+    const overlay = document.createElement('div');
+    overlay.className = 'result-page-overlay';
+    const statusIcon = status === 'error' ? 'bi-x-circle-fill' : 'bi-check-circle-fill';
+    const statusClass = status === 'error' ? 'is-error' : 'is-success';
+    overlay.innerHTML = `
+        <div class="result-page-shell ${statusClass}">
+            <div class="result-page-header">
+                <div class="result-page-title-wrap">
+                    <div class="result-page-icon"><i class="bi ${statusIcon}"></i></div>
+                    <div>
+                        <div class="result-page-title">${title}</div>
+                        <div class="result-page-subtitle">${subtitle}</div>
+                    </div>
+                </div>
+                <button class="result-page-close" id="resultPageCloseBtn"><i class="bi bi-x-lg"></i></button>
+            </div>
+            <div class="result-page-body">
+                <div class="result-page-content" id="resultPageContent">${contentHtml}</div>
+            </div>
+            <div class="result-page-footer">
+                <button class="modal-btn modal-btn-secondary" id="resultPageBackBtn">返回</button>
+            </div>
+        </div>
+    `;
+    document.body.appendChild(overlay);
+    overlay.offsetHeight;
+    overlay.classList.add('show');
+
+    const closeOverlay = () => {
+        overlay.classList.remove('show');
+        setTimeout(() => overlay.remove(), 240);
+    };
+
+    const contentRoot = overlay.querySelector('#resultPageContent');
+    actionBindings.forEach(binding => {
+        const target = contentRoot.querySelector(binding.selector);
+        if (target && typeof binding.handler === 'function') {
+            target.addEventListener(binding.event || 'click', binding.handler);
+        }
+    });
+
+    overlay.querySelector('#resultPageCloseBtn').onclick = closeOverlay;
+    overlay.querySelector('#resultPageBackBtn').onclick = closeOverlay;
+    overlay.onclick = (e) => {
+        if (e.target === overlay) {
+            closeOverlay();
+        }
+    };
+}
+
 // 定义各分类的格式列表
 const formatMap = {
     'images': ['PNG', 'JPG', 'JPEG', 'GIF', 'BMP', 'WEBP', 'SVG', 'ICO'],
@@ -373,6 +424,8 @@ document.addEventListener('DOMContentLoaded', () => {
         completed: 0,
         total: 0
     };
+    let operationLockCount = 0;
+    let operationLockToastTime = 0;
 
     function extractFileName(filePath) {
         if (!filePath || typeof filePath !== 'string') {
@@ -501,6 +554,51 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     }
 
+    function isOperationLocked() {
+        return operationLockCount > 0;
+    }
+
+    function setOperationSidebarLock(locked) {
+        document.body.classList.toggle('operation-sidebar-locked', locked);
+    }
+
+    function setOperationButtonState(button, busy, labelText) {
+        if (!button) {
+            return;
+        }
+        if (!button.dataset.originalHtml) {
+            button.dataset.originalHtml = button.innerHTML;
+        }
+        if (busy) {
+            button.disabled = true;
+            button.classList.add('is-busy');
+            button.innerHTML = `
+                <span class="busy-button-content">
+                    <span>${labelText}</span>
+                    <span class="loading-dots"><span></span><span></span><span></span></span>
+                </span>
+            `;
+            return;
+        }
+        button.disabled = false;
+        button.classList.remove('is-busy');
+        button.innerHTML = button.dataset.originalHtml;
+    }
+
+    function setOperationBusy(button, busy, labelText) {
+        if (busy) {
+            operationLockCount += 1;
+            setOperationSidebarLock(true);
+            setOperationButtonState(button, true, labelText);
+            return;
+        }
+        operationLockCount = Math.max(0, operationLockCount - 1);
+        if (operationLockCount === 0) {
+            setOperationSidebarLock(false);
+        }
+        setOperationButtonState(button, false);
+    }
+
     // 监听进度更新
     window.electronAPI.onProgress((value) => {
         // 如果后端传来的进度大于当前进度，则更新
@@ -564,6 +662,14 @@ document.addEventListener('DOMContentLoaded', () => {
     // 侧边栏按钮点击事件
     sidebarButtons.forEach(button => {
         button.addEventListener('click', (event) => {
+            if (isOperationLocked()) {
+                const now = Date.now();
+                if (now - operationLockToastTime > 1800) {
+                    showToast('任务进行中，已锁定侧边栏，请等待当前操作完成', 'info', 2600);
+                    operationLockToastTime = now;
+                }
+                return;
+            }
             const category = event.currentTarget.getAttribute('data-category');
             currentCategory = category;
             
@@ -1084,11 +1190,9 @@ document.addEventListener('DOMContentLoaded', () => {
         startEncryptionBtn.addEventListener('click', async () => {
             const encResultContainer = document.getElementById('encResultContainer');
             encResultContainer.style.display = 'none';
-            showEncryptionSpinner(true); // 显示加载器
 
             if (!encFilePath) {
                 showToast('请先选择要加密的文件或文件夹', 'error');
-                showEncryptionSpinner(false); // 隐藏加载器
                 return;
             }
             const algorithm = document.getElementById('encAlgorithm').value;
@@ -1097,14 +1201,14 @@ document.addEventListener('DOMContentLoaded', () => {
             const password = passwordKeyInput ? passwordKeyInput.value : '';
             if (keyOption === 'file' && !keyFilePath) {
                 showToast('请选择密钥文件', 'error');
-                showEncryptionSpinner(false); // 隐藏加载器
                 return;
             }
             if (keyOption === 'password' && !password) {
                 showToast('请输入加密密码', 'error');
-                showEncryptionSpinner(false); // 隐藏加载器
                 return;
             }
+            setOperationBusy(startEncryptionBtn, true, '正在加密');
+            showEncryptionSpinner(true); // 显示加载器
             showToast('正在加密...', 'info');
             try {
                 const result = await window.electronAPI.encryptFile({ 
@@ -1144,14 +1248,47 @@ document.addEventListener('DOMContentLoaded', () => {
                         document.getElementById('encOpenPathBtn').addEventListener('click', () => {
                             window.electronAPI.openPath(result.outputPath);
                         });
+                        showOperationResultPage({
+                            title: '加密完成',
+                            subtitle: result.outputPath.split(/[\\/]/).pop(),
+                            status: 'success',
+                            contentHtml: resultContainer.innerHTML,
+                            actionBindings: [
+                                { selector: '#encShowInFolderBtn', handler: () => window.electronAPI.showItemInFolder(result.outputPath) },
+                                { selector: '#encOpenPathBtn', handler: () => window.electronAPI.openPath(result.outputPath) }
+                            ]
+                        });
                     }
                 } else {
                     showToast(`加密失败: ${result.message}`, 'error');
+                    showOperationResultPage({
+                        title: '加密失败',
+                        subtitle: '请检查密钥与文件权限',
+                        status: 'error',
+                        contentHtml: `
+                            <div class="conversion-error-card">
+                                <div class="error-header"><i class="bi bi-x-circle-fill"></i><span>加密失败</span></div>
+                                <div class="result-info"><div class="meta-item"><span class="meta-label">错误信息:</span> ${result.message}</div></div>
+                            </div>
+                        `
+                    });
                 }
             } catch (error) {
                 showToast(`加密过程中发生错误: ${error.message}`, 'error');
+                showOperationResultPage({
+                    title: '加密异常',
+                    subtitle: '执行过程中发生错误',
+                    status: 'error',
+                    contentHtml: `
+                        <div class="conversion-error-card">
+                            <div class="error-header"><i class="bi bi-x-circle-fill"></i><span>加密异常</span></div>
+                            <div class="result-info"><div class="meta-item"><span class="meta-label">错误信息:</span> ${error.message}</div></div>
+                        </div>
+                    `
+                });
             } finally {
                 showEncryptionSpinner(false); // 隐藏加载器
+                setOperationBusy(startEncryptionBtn, false);
             }
         });
 
@@ -1244,11 +1381,9 @@ document.addEventListener('DOMContentLoaded', () => {
         startDecryptionBtn.addEventListener('click', async () => {
             const decResultContainer = document.getElementById('decResultContainer');
             decResultContainer.style.display = 'none';
-            showDecryptionSpinner(true); // 显示加载器
 
             if (!decFilePath) {
                 showToast('请先选择要解密的文件', 'error');
-                showDecryptionSpinner(false); // 隐藏加载器
                 return;
             }
             const algorithm = document.getElementById('decAlgorithm').value;
@@ -1257,14 +1392,14 @@ document.addEventListener('DOMContentLoaded', () => {
             const password = decPasswordKeyInput ? decPasswordKeyInput.value : '';
             if (keyOption === 'file' && !keyFilePath) {
                 showToast('请选择密钥文件', 'error');
-                showDecryptionSpinner(false); // 隐藏加载器
                 return;
             }
             if (keyOption === 'password' && !password) {
                 showToast('请输入解密密码', 'error');
-                showDecryptionSpinner(false); // 隐藏加载器
                 return;
             }
+            setOperationBusy(startDecryptionBtn, true, '正在解密');
+            showDecryptionSpinner(true); // 显示加载器
             showToast('正在解密...', 'info');
             try {
                 const result = await window.electronAPI.decryptFile({ 
@@ -1304,14 +1439,47 @@ document.addEventListener('DOMContentLoaded', () => {
                         document.getElementById('decOpenPathBtn').addEventListener('click', () => {
                             window.electronAPI.openPath(result.outputPath);
                         });
+                        showOperationResultPage({
+                            title: '解密完成',
+                            subtitle: result.outputPath.split(/[\\/]/).pop(),
+                            status: 'success',
+                            contentHtml: resultContainer.innerHTML,
+                            actionBindings: [
+                                { selector: '#decShowInFolderBtn', handler: () => window.electronAPI.showItemInFolder(result.outputPath) },
+                                { selector: '#decOpenPathBtn', handler: () => window.electronAPI.openPath(result.outputPath) }
+                            ]
+                        });
                     }
                 } else {
                     showToast(`解密失败: ${result.message}`, 'error');
+                    showOperationResultPage({
+                        title: '解密失败',
+                        subtitle: '请检查密钥或密码是否正确',
+                        status: 'error',
+                        contentHtml: `
+                            <div class="conversion-error-card">
+                                <div class="error-header"><i class="bi bi-x-circle-fill"></i><span>解密失败</span></div>
+                                <div class="result-info"><div class="meta-item"><span class="meta-label">错误信息:</span> ${result.message}</div></div>
+                            </div>
+                        `
+                    });
                 }
             } catch (error) {
                 showToast(`解密过程中发生错误: ${error.message}`, 'error');
+                showOperationResultPage({
+                    title: '解密异常',
+                    subtitle: '执行过程中发生错误',
+                    status: 'error',
+                    contentHtml: `
+                        <div class="conversion-error-card">
+                            <div class="error-header"><i class="bi bi-x-circle-fill"></i><span>解密异常</span></div>
+                            <div class="result-info"><div class="meta-item"><span class="meta-label">错误信息:</span> ${error.message}</div></div>
+                        </div>
+                    `
+                });
             } finally {
                 showDecryptionSpinner(false); // 隐藏加载器
+                setOperationBusy(startDecryptionBtn, false);
             }
         });
 
@@ -1417,6 +1585,7 @@ document.addEventListener('DOMContentLoaded', () => {
             }
             const algorithm = hashAlgorithmSelect.value;
             resetHashUI();
+            setOperationBusy(calculateHashBtn, true, '正在计算');
             showHashSpinner(true);
             showToast('正在计算哈希...', 'info');
 
@@ -1471,14 +1640,55 @@ document.addEventListener('DOMContentLoaded', () => {
                     });
 
                     showToast('哈希计算完成！', 'success');
+                    showOperationResultPage({
+                        title: '哈希计算完成',
+                        subtitle: algorithm.toUpperCase(),
+                        status: 'success',
+                        contentHtml: hashResultContainer.innerHTML,
+                        actionBindings: [
+                            {
+                                selector: '#copyHashBtn',
+                                handler: () => {
+                                    navigator.clipboard.writeText(calculatedHash).then(() => {
+                                        showToast('哈希值已复制到剪贴板', 'success');
+                                    }).catch(err => {
+                                        showToast(`复制失败: ${err.message}`, 'error');
+                                    });
+                                }
+                            }
+                        ]
+                    });
 
                 } else {
                     showToast(`哈希计算失败: ${result.message}`, 'error');
+                    showOperationResultPage({
+                        title: '哈希计算失败',
+                        subtitle: '请检查文件或算法设置',
+                        status: 'error',
+                        contentHtml: `
+                            <div class="conversion-error-card">
+                                <div class="error-header"><i class="bi bi-x-circle-fill"></i><span>哈希计算失败</span></div>
+                                <div class="result-info"><div class="meta-item"><span class="meta-label">错误信息:</span> ${result.message}</div></div>
+                            </div>
+                        `
+                    });
                 }
             } catch (error) {
                 showToast(`哈希计算过程中发生错误: ${error.message}`, 'error');
+                showOperationResultPage({
+                    title: '哈希计算异常',
+                    subtitle: '执行过程中发生错误',
+                    status: 'error',
+                    contentHtml: `
+                        <div class="conversion-error-card">
+                            <div class="error-header"><i class="bi bi-x-circle-fill"></i><span>哈希计算异常</span></div>
+                            <div class="result-info"><div class="meta-item"><span class="meta-label">错误信息:</span> ${error.message}</div></div>
+                        </div>
+                    `
+                });
             } finally {
                 showHashSpinner(false);
+                setOperationBusy(calculateHashBtn, false);
             }
         });
 
@@ -1692,9 +1902,7 @@ document.addEventListener('DOMContentLoaded', () => {
             progressActions.style.display = 'flex';
         }
 
-        if (startButton) {
-            startButton.style.display = 'none';
-        }
+        setOperationBusy(startButton, true, '正在转换');
 
         updateBatchProgressUI({
             percent: 0,
@@ -1705,22 +1913,23 @@ document.addEventListener('DOMContentLoaded', () => {
         });
 
         showToast('批量转换已开始', 'info', 3500);
-        const batchResult = await window.electronAPI.batchConvertImages({
-            batchId: batchState.batchId,
-            files: selectedBatchFiles.map(item => item.filePath),
-            targetFormat,
-            category,
-            options,
-            outputDirectory: outputResult.directoryPath,
-            concurrency: 3
-        });
-
-        batchState.active = false;
-        if (progressActions) {
-            progressActions.style.display = 'none';
-        }
-        if (startButton) {
-            startButton.style.display = 'block';
+        let batchResult = null;
+        try {
+            batchResult = await window.electronAPI.batchConvertImages({
+                batchId: batchState.batchId,
+                files: selectedBatchFiles.map(item => item.filePath),
+                targetFormat,
+                category,
+                options,
+                outputDirectory: outputResult.directoryPath,
+                concurrency: 3
+            });
+        } finally {
+            batchState.active = false;
+            if (progressActions) {
+                progressActions.style.display = 'none';
+            }
+            setOperationBusy(startButton, false);
         }
 
         const resultContainer = document.getElementById('conversionResult');
@@ -1732,11 +1941,33 @@ document.addEventListener('DOMContentLoaded', () => {
             if (progressCurrent) {
                 progressCurrent.textContent = '已取消';
             }
+            showOperationResultPage({
+                title: '批量转换已取消',
+                subtitle: '任务已停止',
+                status: 'error',
+                contentHtml: `
+                    <div class="conversion-error-card">
+                        <div class="error-header"><i class="bi bi-x-circle-fill"></i><span>批量转换已取消</span></div>
+                        <div class="result-info"><div class="meta-item"><span class="meta-label">状态:</span> 用户已取消本次批量任务</div></div>
+                    </div>
+                `
+            });
             return;
         }
 
         if (!batchResult.success && batchResult.message) {
             showToast(`批量转换失败: ${batchResult.message}`, 'error');
+            showOperationResultPage({
+                title: '批量转换失败',
+                subtitle: '请检查失败原因后重试',
+                status: 'error',
+                contentHtml: `
+                    <div class="conversion-error-card">
+                        <div class="error-header"><i class="bi bi-x-circle-fill"></i><span>批量转换失败</span></div>
+                        <div class="result-info"><div class="meta-item"><span class="meta-label">错误信息:</span> ${batchResult.message}</div></div>
+                    </div>
+                `
+            });
             return;
         }
 
@@ -1744,6 +1975,36 @@ document.addEventListener('DOMContentLoaded', () => {
             total: batchResult.total,
             successful: batchState.successful,
             failed: batchState.failed
+        });
+        showOperationResultPage({
+            title: '批量转换完成',
+            subtitle: `成功 ${batchState.successful.length} 个，失败 ${batchState.failed.length} 个`,
+            status: batchState.failed.length > 0 ? 'error' : 'success',
+            contentHtml: resultContainer.innerHTML,
+            actionBindings: [
+                {
+                    selector: '#batchOpenFolderBtn',
+                    handler: () => {
+                        if (batchState.outputDirectory) {
+                            window.electronAPI.openPath(batchState.outputDirectory);
+                        }
+                    }
+                },
+                {
+                    selector: '#batchRetryFailedBtn',
+                    handler: async () => {
+                        const failed = batchState.failed || [];
+                        selectedBatchFiles = failed.map(item => ({
+                            filePath: item.sourcePath,
+                            fileName: item.fileName || item.sourcePath.split(/[\\/]/).pop()
+                        }));
+                        batchState.failed = [];
+                        renderBatchSelectionUI(currentCategory);
+                        selectedFilePath = selectedBatchFiles[0] ? selectedBatchFiles[0].filePath : null;
+                        showToast(`已重新装载 ${selectedBatchFiles.length} 个失败文件`, 'info');
+                    }
+                }
+            ]
         });
     }
 
@@ -2235,8 +2496,7 @@ document.addEventListener('DOMContentLoaded', () => {
             // 启动假进度条定时器
             if (progressTimer) clearInterval(progressTimer);
             
-            // 隐藏开始转换按钮
-            newStartButton.style.display = 'none';
+            setOperationBusy(newStartButton, true, '正在转换');
             
             progressTimer = setInterval(() => {
                 // 30%到95%之间进行假进度模拟
@@ -2306,8 +2566,6 @@ document.addEventListener('DOMContentLoaded', () => {
                 setTimeout(() => {
                     const progressContainer = document.getElementById('progressContainer');
                     if (progressContainer) progressContainer.style.display = 'none';
-                    // 重新显示开始转换按钮
-                    if (startButton) startButton.style.display = 'block';
                 }, 2000);
 
                 if (result.success) {
@@ -2366,9 +2624,38 @@ document.addEventListener('DOMContentLoaded', () => {
                         document.getElementById('openFileAction').onclick = () => {
                              window.electronAPI.openPath(result.outputPath);
                         };
+                        showOperationResultPage({
+                            title: '转换完成',
+                            subtitle: `${categoryNameMap[category]} → ${targetFormat.toUpperCase()}`,
+                            status: 'success',
+                            contentHtml: resultContainer.innerHTML,
+                            actionBindings: [
+                                { selector: '#openFolderAction', handler: () => window.electronAPI.showItemInFolder(result.outputPath) },
+                                { selector: '#openFileAction', handler: () => window.electronAPI.openPath(result.outputPath) },
+                                {
+                                    selector: '#resultFileInfo',
+                                    event: 'contextmenu',
+                                    handler: (e) => {
+                                        e.preventDefault();
+                                        window.electronAPI.showContextMenu(result.outputPath);
+                                    }
+                                }
+                            ]
+                        });
                     }
                 } else {
                     showToast(`转换失败: ${result.message}`, 'error', 5000);
+                    showOperationResultPage({
+                        title: '转换失败',
+                        subtitle: `${categoryNameMap[category]} → ${targetFormat.toUpperCase()}`,
+                        status: 'error',
+                        contentHtml: `
+                            <div class="conversion-error-card">
+                                <div class="error-header"><i class="bi bi-x-circle-fill"></i><span>转换失败</span></div>
+                                <div class="result-info"><div class="meta-item"><span class="meta-label">错误信息:</span> ${result.message}</div></div>
+                            </div>
+                        `
+                    });
                 }
             })
             .catch(error => {
@@ -2380,10 +2667,21 @@ document.addEventListener('DOMContentLoaded', () => {
                 const progressContainer = document.getElementById('progressContainer');
                 if (progressContainer) progressContainer.style.display = 'none';
                 
-                // 转换失败也需要重新显示按钮
-                if (startButton) startButton.style.display = 'block';
-
                 showToast(`错误: ${error.message}`, 'error', 5000);
+                showOperationResultPage({
+                    title: '转换异常',
+                    subtitle: `${categoryNameMap[category]} → ${targetFormat.toUpperCase()}`,
+                    status: 'error',
+                    contentHtml: `
+                        <div class="conversion-error-card">
+                            <div class="error-header"><i class="bi bi-x-circle-fill"></i><span>转换异常</span></div>
+                            <div class="result-info"><div class="meta-item"><span class="meta-label">错误信息:</span> ${error.message}</div></div>
+                        </div>
+                    `
+                });
+            })
+            .finally(() => {
+                setOperationBusy(startButton, false);
             });
     }
 });
