@@ -18,6 +18,7 @@
     --radius-lg: 12px;
     --card-bg: #ffffff;
     --input-bg: #ffffff;
+    --input-hover-bg: #ffffff;
     --icon-color: #9ca3af;
 }
 
@@ -34,6 +35,7 @@
         --shadow-lg: 0 20px 25px -5px rgba(0, 0, 0, 0.5), 0 10px 10px -5px rgba(0, 0, 0, 0.3);
         --card-bg: #1e293b;
         --input-bg: #0f172a;
+        --input-hover-bg: #1e293b;
         --icon-color: #64748b;
     }
 }
@@ -50,6 +52,7 @@
     --shadow-lg: 0 20px 25px -5px rgba(0, 0, 0, 0.5), 0 10px 10px -5px rgba(0, 0, 0, 0.3);
     --card-bg: #1e293b;
     --input-bg: #0f172a;
+    --input-hover-bg: #1e293b;
     --icon-color: #64748b;
 }
 
@@ -339,7 +342,7 @@ body {
 .form-group input[type="text"]:hover,
 .form-group input[type="password"]:hover {
     border-color: var(--primary-color);
-    background-color: #fff;
+    background-color: var(--input-hover-bg);
     box-shadow: var(--shadow-md);
 }
 
@@ -352,7 +355,7 @@ body {
 .form-group select:hover,
 .setting-item select:hover {
     border-color: var(--primary-color);
-    background-color: #fff;
+    background-color: var(--input-hover-bg);
     box-shadow: var(--shadow-md);
 }
 
