@@ -404,6 +404,75 @@ document.addEventListener('DOMContentLoaded', () => {
         decryptionButton.click();
     }
 
+    function openTargetInEncryption(filePath, showSwitchToast = true) {
+        if (!filePath || typeof filePath !== 'string') {
+            return;
+        }
+        const normalizedPath = filePath.trim();
+        if (!normalizedPath) {
+            return;
+        }
+        document.body.dataset.pendingEncryptionFilePath = normalizedPath;
+        document.body.dataset.pendingEncryptionFileName = extractFileName(normalizedPath);
+        const encryptionButton = Array.from(sidebarButtons).find(
+            btn => btn.getAttribute('data-category') === 'encryption'
+        );
+        if (!encryptionButton) {
+            return;
+        }
+        if (showSwitchToast && currentCategory !== 'encryption') {
+            showToast('已收到加密任务，正在跳转到加密页面', 'info', 3000);
+        }
+        encryptionButton.click();
+    }
+
+    function openTargetInConversion(filePath, showSwitchToast = true) {
+        if (!filePath || typeof filePath !== 'string') {
+            return;
+        }
+        const normalizedPath = filePath.trim();
+        if (!normalizedPath) {
+            return;
+        }
+        const fileName = extractFileName(normalizedPath);
+        const category = detectFileCategory(fileName);
+        if (!category || !['images', 'videos', 'audio', 'documents'].includes(category)) {
+            showToast('无法识别文件格式，请在应用内手动选择分类', 'info', 4000);
+            return;
+        }
+        document.body.dataset.pendingFilePath = normalizedPath;
+        document.body.dataset.pendingFileName = fileName;
+        const targetButton = Array.from(sidebarButtons).find(
+            btn => btn.getAttribute('data-category') === category
+        );
+        if (!targetButton) {
+            return;
+        }
+        if (showSwitchToast && currentCategory !== category) {
+            showToast(`已识别为${categoryNameMap[category]}，正在跳转`, 'info', 3000);
+        }
+        targetButton.click();
+    }
+
+    function handleLaunchContextAction(payload, showSwitchToast = true) {
+        if (!payload || typeof payload !== 'object') {
+            return;
+        }
+        const action = String(payload.action || '').toLowerCase();
+        const targetPath = payload.targetPath;
+        if (action === 'decrypt') {
+            openEncryptedFileInDecryption(targetPath, showSwitchToast);
+            return;
+        }
+        if (action === 'encrypt') {
+            openTargetInEncryption(targetPath, showSwitchToast);
+            return;
+        }
+        if (action === 'convert') {
+            openTargetInConversion(targetPath, showSwitchToast);
+        }
+    }
+
     function updateProgressBar(value) {
         const progressBar = document.getElementById('progressBar');
         const progressText = document.getElementById('progressText');
@@ -507,12 +576,12 @@ document.addEventListener('DOMContentLoaded', () => {
         });
     });
 
-    window.electronAPI.onOpenEncryptedFile((filePath) => {
-        openEncryptedFileInDecryption(filePath, true);
+    window.electronAPI.onLaunchContextAction((payload) => {
+        handleLaunchContextAction(payload, true);
     });
-    window.electronAPI.consumePendingOpenEncryptedFile().then((filePath) => {
-        if (filePath) {
-            openEncryptedFileInDecryption(filePath, false);
+    window.electronAPI.consumePendingLaunchAction().then((payload) => {
+        if (payload) {
+            handleLaunchContextAction(payload, false);
         }
     });
 
@@ -905,6 +974,17 @@ document.addEventListener('DOMContentLoaded', () => {
 
         const encDropZone = document.getElementById('encDropZone');
         const encSelectedFileName = document.getElementById('encSelectedFileName');
+        const applyPendingEncryptionFile = () => {
+            const pendingPath = document.body.dataset.pendingEncryptionFilePath;
+            if (!pendingPath) {
+                return;
+            }
+            const pendingName = document.body.dataset.pendingEncryptionFileName || extractFileName(pendingPath);
+            encFilePath = pendingPath;
+            encSelectedFileName.textContent = `✓ 已选择: ${pendingName}`;
+            delete document.body.dataset.pendingEncryptionFilePath;
+            delete document.body.dataset.pendingEncryptionFileName;
+        };
 
         encDropZone.addEventListener('click', async () => {
             const result = await window.electronAPI.selectPath(['openFile']);
@@ -1033,6 +1113,8 @@ document.addEventListener('DOMContentLoaded', () => {
                 showEncryptionSpinner(false); // 隐藏加载器
             }
         });
+
+        applyPendingEncryptionFile();
     }
 
     function bindDecryptionEvents() {

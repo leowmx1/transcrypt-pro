@@ -39,31 +39,74 @@ const ORIGINAL_FORMAT_VALUE = '__original__';
 const settingsPath = path.join(app.getPath('userData'), 'settings.json');
 const activeBatchControllers = new Map();
 let mainWindow = null;
-let pendingOpenEncryptedFilePath = null;
+let pendingLaunchAction = null;
+const LAUNCH_ACTIONS = {
+    ENCRYPT: 'encrypt',
+    CONVERT: 'convert',
+    DECRYPT: 'decrypt'
+};
 
 function isEncryptedFilePath(filePath) {
     return typeof filePath === 'string' && filePath.toLowerCase().endsWith(ENCRYPTED_FILE_EXTENSION);
 }
 
-function extractEncryptedFilePathFromArgs(argv) {
+function normalizeArgPath(rawArg) {
+    if (typeof rawArg !== 'string') {
+        return null;
+    }
+    const trimmed = rawArg.trim().replace(/^"(.*)"$/, '$1');
+    if (!trimmed || trimmed.startsWith('-')) {
+        return null;
+    }
+    const resolvedPath = path.resolve(trimmed);
+    if (!fs.existsSync(resolvedPath)) {
+        return null;
+    }
+    return resolvedPath;
+}
+
+function extractLaunchActionFromArgs(argv) {
     if (!Array.isArray(argv)) {
         return null;
     }
+    let action = null;
+    let targetPath = null;
+    let encryptedFilePath = null;
     for (const rawArg of argv) {
         if (typeof rawArg !== 'string') {
             continue;
         }
-        const arg = rawArg.trim().replace(/^"(.*)"$/, '$1');
-        if (!arg || arg.startsWith('-')) {
+        const arg = rawArg.trim();
+        if (!arg) {
             continue;
         }
-        if (!isEncryptedFilePath(arg)) {
+        if (arg.startsWith('--context-action=')) {
+            action = arg.slice('--context-action='.length).toLowerCase();
             continue;
         }
-        const resolvedPath = path.resolve(arg);
-        if (fs.existsSync(resolvedPath)) {
-            return resolvedPath;
+        if (arg.startsWith('--context-target=')) {
+            const parsedTarget = normalizeArgPath(arg.slice('--context-target='.length));
+            if (parsedTarget) {
+                targetPath = parsedTarget;
+            }
+            continue;
         }
+        const parsedPath = normalizeArgPath(arg);
+        if (!parsedPath) {
+            continue;
+        }
+        if (isEncryptedFilePath(parsedPath)) {
+            encryptedFilePath = parsedPath;
+        }
+        if (!targetPath) {
+            targetPath = parsedPath;
+        }
+    }
+    if (action && targetPath && Object.values(LAUNCH_ACTIONS).includes(action)) {
+        return { action, targetPath };
+    }
+    if (encryptedFilePath) {
+        return { action: LAUNCH_ACTIONS.DECRYPT, targetPath: encryptedFilePath };
     }
     return null;
 }
@@ -78,11 +121,22 @@ function focusMainWindow() {
     mainWindow.focus();
 }
 
-function notifyRendererOpenEncryptedFile(filePath) {
-    if (!filePath || !mainWindow || mainWindow.isDestroyed()) {
+function notifyRendererLaunchAction(payload) {
+    if (!payload || !payload.action || !payload.targetPath || !mainWindow || mainWindow.isDestroyed()) {
         return;
     }
-    mainWindow.webContents.send('open-encrypted-file', filePath);
+    mainWindow.webContents.send('launch-context-action', payload);
+}
+
+function registerWindowsContextMenuCommands(appPath, iconPath) {
+    const registerCommand = (registryKey, menuLabel, actionName) => {
+        runRegAdd([registryKey, '/ve', '/d', menuLabel, '/f']);
+        runRegAdd([registryKey, '/v', 'Icon', '/d', `${escapeRegValue(iconPath)},0`, '/f']);
+        runRegAdd([`${registryKey}\\command`, '/ve', '/d', `\\"${escapeRegValue(appPath)}\\" --context-action=${actionName} --context-target=\\"%1\\"`, '/f']);
+    };
+    registerCommand('HKCU\\Software\\Classes\\*\\shell\\TransCryptPro.Encrypt', '使用 TransCrypt Pro 加密', LAUNCH_ACTIONS.ENCRYPT);
+    registerCommand('HKCU\\Software\\Classes\\*\\shell\\TransCryptPro.Convert', '使用 TransCrypt Pro 格式转换', LAUNCH_ACTIONS.CONVERT);
+    registerCommand('HKCU\\Software\\Classes\\Directory\\shell\\TransCryptPro.Encrypt', '使用 TransCrypt Pro 加密', LAUNCH_ACTIONS.ENCRYPT);
 }
 
 function escapeRegValue(value) {
@@ -130,6 +184,11 @@ function registerWindowsFileAssociations() {
             const iconPath = ensureShellIconFile(tckeyIconSource, 'tckey-icon.ico');
             registerCustomFileType('tckey', 'TransCryptPro.tckey', 'TransCrypt Pro Key File', iconPath, appPath);
         }
+        const appIconSource = path.join(__dirname, 'assets', 'app-icon.ico');
+        const contextMenuIconPath = fs.existsSync(appIconSource)
+            ? ensureShellIconFile(appIconSource, 'app-icon.ico')
+            : appPath;
+        registerWindowsContextMenuCommands(appPath, contextMenuIconPath);
     } catch (error) {
     }
 }
@@ -261,8 +320,8 @@ const createWindow = () => {
     });
     mainWindow.loadFile('index.html');
     mainWindow.webContents.on('did-finish-load', () => {
-        if (pendingOpenEncryptedFilePath) {
-            notifyRendererOpenEncryptedFile(pendingOpenEncryptedFilePath);
+        if (pendingLaunchAction) {
+            notifyRendererLaunchAction(pendingLaunchAction);
         }
     });
     mainWindow.on('closed', () => {
@@ -304,7 +363,7 @@ try {
 }
 
 if (process.platform !== 'darwin') {
-    pendingOpenEncryptedFilePath = extractEncryptedFilePathFromArgs(process.argv);
+    pendingLaunchAction = extractLaunchActionFromArgs(process.argv);
 }
 
 const gotTheLock = app.requestSingleInstanceLock();
@@ -312,10 +371,10 @@ if (!gotTheLock) {
     app.quit();
 } else {
     app.on('second-instance', (_event, commandLine) => {
-        const openedFilePath = extractEncryptedFilePathFromArgs(commandLine);
-        if (openedFilePath) {
-            pendingOpenEncryptedFilePath = openedFilePath;
-            notifyRendererOpenEncryptedFile(openedFilePath);
+        const launchAction = extractLaunchActionFromArgs(commandLine);
+        if (launchAction) {
+            pendingLaunchAction = launchAction;
+            notifyRendererLaunchAction(launchAction);
         }
         focusMainWindow();
     });
@@ -326,9 +385,12 @@ app.on('open-file', (event, filePath) => {
     if (!isEncryptedFilePath(filePath)) {
         return;
     }
-    pendingOpenEncryptedFilePath = path.resolve(filePath);
+    pendingLaunchAction = {
+        action: LAUNCH_ACTIONS.DECRYPT,
+        targetPath: path.resolve(filePath)
+    };
     if (app.isReady()) {
-        notifyRendererOpenEncryptedFile(pendingOpenEncryptedFilePath);
+        notifyRendererLaunchAction(pendingLaunchAction);
         focusMainWindow();
     }
 });
@@ -375,10 +437,10 @@ ipcMain.handle('select-file', async (event, { category }) => {
     }
 });
 
-ipcMain.handle('consume-pending-open-encrypted-file', async () => {
-    const filePath = pendingOpenEncryptedFilePath;
-    pendingOpenEncryptedFilePath = null;
-    return filePath || null;
+ipcMain.handle('consume-pending-launch-action', async () => {
+    const payload = pendingLaunchAction;
+    pendingLaunchAction = null;
+    return payload || null;
 });
 
 ipcMain.handle('select-files', async (event, { category }) => {
