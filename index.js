@@ -62,11 +62,16 @@ const safeboxSessions = new Map();
 const LAUNCH_ACTIONS = {
     ENCRYPT: 'encrypt',
     CONVERT: 'convert',
-    DECRYPT: 'decrypt'
+    DECRYPT: 'decrypt',
+    SAFEBOX_OPEN: 'safebox-open'
 };
 
 function isEncryptedFilePath(filePath) {
     return typeof filePath === 'string' && filePath.toLowerCase().endsWith(ENCRYPTED_FILE_EXTENSION);
+}
+
+function isSafeboxFilePath(filePath) {
+    return typeof filePath === 'string' && filePath.toLowerCase().endsWith(SAFEBOX_FILE_EXTENSION);
 }
 
 function normalizeArgPath(rawArg) {
@@ -91,6 +96,7 @@ function extractLaunchActionFromArgs(argv) {
     let action = null;
     let targetPath = null;
     let encryptedFilePath = null;
+    let safeboxFilePath = null;
     for (const rawArg of argv) {
         if (typeof rawArg !== 'string') {
             continue;
@@ -117,6 +123,9 @@ function extractLaunchActionFromArgs(argv) {
         if (isEncryptedFilePath(parsedPath)) {
             encryptedFilePath = parsedPath;
         }
+        if (isSafeboxFilePath(parsedPath)) {
+            safeboxFilePath = parsedPath;
+        }
         if (!targetPath) {
             targetPath = parsedPath;
         }
@@ -126,6 +135,9 @@ function extractLaunchActionFromArgs(argv) {
     }
     if (encryptedFilePath) {
         return { action: LAUNCH_ACTIONS.DECRYPT, targetPath: encryptedFilePath };
+    }
+    if (safeboxFilePath) {
+        return { action: LAUNCH_ACTIONS.SAFEBOX_OPEN, targetPath: safeboxFilePath };
     }
     return null;
 }
@@ -151,7 +163,9 @@ function registerWindowsContextMenuCommands(appPath, iconPath) {
     const registerCommand = (registryKey, menuLabel, actionName) => {
         runRegAdd([registryKey, '/ve', '/d', menuLabel, '/f']);
         runRegAdd([registryKey, '/v', 'Icon', '/d', `${escapeRegValue(iconPath)},0`, '/f']);
-        runRegAdd([`${registryKey}\\command`, '/ve', '/d', `\\"${escapeRegValue(appPath)}\\" --context-action=${actionName} --context-target=\\"%1\\"`, '/f']);
+        const appPathClean = String(appPath).replace(/"/g, '');
+        const cmdValue = `"${appPathClean}" --context-action=${actionName} --context-target="%1"`;
+        runRegAdd([`${registryKey}\\command`, '/ve', '/d', cmdValue, '/f']);
     };
     registerCommand('HKCU\\Software\\Classes\\*\\shell\\TransCryptPro.Encrypt', '使用 TransCrypt Pro 加密', LAUNCH_ACTIONS.ENCRYPT);
     registerCommand('HKCU\\Software\\Classes\\*\\shell\\TransCryptPro.Convert', '使用 TransCrypt Pro 格式转换', LAUNCH_ACTIONS.CONVERT);
@@ -184,7 +198,9 @@ function registerCustomFileType(extension, progId, description, iconPath, appPat
     runRegAdd([`HKCU\\Software\\Classes\\.${extension}`, '/ve', '/d', progId, '/f']);
     runRegAdd([`HKCU\\Software\\Classes\\${progId}`, '/ve', '/d', description, '/f']);
     runRegAdd([`HKCU\\Software\\Classes\\${progId}\\DefaultIcon`, '/ve', '/d', `${escapeRegValue(iconPath)},0`, '/f']);
-    runRegAdd([`HKCU\\Software\\Classes\\${progId}\\shell\\open\\command`, '/ve', '/d', `\\"${escapeRegValue(appPath)}\\" \\"%1\\"`, '/f']);
+    const appPathClean = String(appPath).replace(/"/g, '');
+    const cmdValue = `"${appPathClean}" "%1"`;
+    runRegAdd([`HKCU\\Software\\Classes\\${progId}\\shell\\open\\command`, '/ve', '/d', cmdValue, '/f']);
 }
 
 function registerWindowsFileAssociations() {
@@ -195,6 +211,7 @@ function registerWindowsFileAssociations() {
         const appPath = process.execPath;
         const tclockIconSource = path.join(__dirname, 'assets', 'tclock-icon.ico');
         const tckeyIconSource = path.join(__dirname, 'assets', 'tckey-icon.ico');
+        const tcsafeboxIconSource = path.join(__dirname, 'assets', 'tcsafebox-icon.ico');
         if (fs.existsSync(tclockIconSource)) {
             const iconPath = ensureShellIconFile(tclockIconSource, 'tclock-icon.ico');
             registerCustomFileType('tclock', 'TransCryptPro.tclock', 'TransCrypt Pro Encrypted File', iconPath, appPath);
@@ -202,6 +219,16 @@ function registerWindowsFileAssociations() {
         if (fs.existsSync(tckeyIconSource)) {
             const iconPath = ensureShellIconFile(tckeyIconSource, 'tckey-icon.ico');
             registerCustomFileType('tckey', 'TransCryptPro.tckey', 'TransCrypt Pro Key File', iconPath, appPath);
+        }
+        if (fs.existsSync(tcsafeboxIconSource)) {
+            const iconPath = ensureShellIconFile(tcsafeboxIconSource, 'tcsafebox-icon.ico');
+            registerCustomFileType(
+                'tcsafebox',
+                'TransCryptPro.tcsafebox',
+                'TransCrypt Pro Safebox Container',
+                iconPath,
+                appPath
+            );
         }
         const appIconSource = path.join(__dirname, 'assets', 'app-icon.ico');
         const contextMenuIconPath = fs.existsSync(appIconSource)
@@ -401,13 +428,19 @@ if (!gotTheLock) {
 
 app.on('open-file', (event, filePath) => {
     event.preventDefault();
-    if (!isEncryptedFilePath(filePath)) {
+    if (isEncryptedFilePath(filePath)) {
+        pendingLaunchAction = {
+            action: LAUNCH_ACTIONS.DECRYPT,
+            targetPath: path.resolve(filePath)
+        };
+    } else if (isSafeboxFilePath(filePath)) {
+        pendingLaunchAction = {
+            action: LAUNCH_ACTIONS.SAFEBOX_OPEN,
+            targetPath: path.resolve(filePath)
+        };
+    } else {
         return;
     }
-    pendingLaunchAction = {
-        action: LAUNCH_ACTIONS.DECRYPT,
-        targetPath: path.resolve(filePath)
-    };
     if (app.isReady()) {
         notifyRendererLaunchAction(pendingLaunchAction);
         focusMainWindow();
@@ -1503,45 +1536,73 @@ ipcMain.handle('disguise-decrypt-file', async (_event, { disguisedFilePath }) =>
 });
 
 ipcMain.handle('create-safebox', async (_event, { sourceDirectoryPath, password }) => {
+    let contentDirPath = sourceDirectoryPath || null;
+    let createdTempDir = null;
     try {
         if (process.platform !== 'win32') {
             throw new Error('Safebox 功能目前仅支持 Windows');
         }
-        if (!sourceDirectoryPath) {
-            throw new Error('请先选择要封装的文件夹');
-        }
         if (typeof password !== 'string' || password.length === 0) {
             throw new Error('请输入 Safebox 密码');
         }
-        const stat = await fsp.stat(sourceDirectoryPath);
-        if (!stat.isDirectory()) {
-            throw new Error('Safebox 仅支持将文件夹作为容器内容');
+        if (!contentDirPath) {
+            contentDirPath = path.join(
+                os.tmpdir(),
+                'TransCryptProSafeboxEmpty',
+                `${Date.now()}-${Math.random().toString(16).slice(2)}`
+            );
+            await fsp.mkdir(contentDirPath, { recursive: true });
+            createdTempDir = contentDirPath;
+        } else {
+            const stat = await fsp.stat(contentDirPath);
+            if (!stat.isDirectory()) {
+                throw new Error('Safebox 仅支持将文件夹作为容器内容');
+            }
         }
 
-        const defaultName = `${path.basename(sourceDirectoryPath)}${SAFEBOX_FILE_EXTENSION}`;
+        const defaultBaseName = contentDirPath && sourceDirectoryPath
+            ? path.basename(sourceDirectoryPath)
+            : `safebox-${Date.now()}`;
+        const defaultName = `${defaultBaseName}${SAFEBOX_FILE_EXTENSION}`;
+        const defaultParentDir = sourceDirectoryPath
+            ? path.dirname(sourceDirectoryPath)
+            : app.getPath('downloads');
         const saveResult = await dialog.showSaveDialog({
             title: '保存 Safebox 容器文件',
-            defaultPath: path.join(path.dirname(sourceDirectoryPath), defaultName),
+            defaultPath: path.join(defaultParentDir, defaultName),
             filters: [
                 { name: 'TransCrypt Safebox', extensions: [SAFEBOX_FILE_EXTENSION.replace('.', '')] },
                 { name: '所有文件', extensions: ['*'] }
             ]
         });
         if (saveResult.canceled || !saveResult.filePath) {
+            if (createdTempDir) {
+                await fsp.rm(createdTempDir, { recursive: true, force: true });
+            }
             return { success: false, message: '保存已取消' };
         }
 
         const salt = crypto.randomBytes(SAFEBOX_SALT_LENGTH);
         const derivedKey = await deriveSafeboxKeyFromPassword(password, salt);
-        const plainZip = await getDirectoryAsBuffer(sourceDirectoryPath);
+        const plainZip = await getDirectoryAsBuffer(contentDirPath);
         const iv = crypto.randomBytes(IV_LENGTH);
         const cipher = crypto.createCipheriv('aes-256-gcm', derivedKey, iv, { authTagLength: AUTH_TAG_LENGTH });
         const encryptedData = Buffer.concat([cipher.update(plainZip), cipher.final()]);
         const authTag = cipher.getAuthTag();
         const finalBuffer = buildSafeboxFileBuffer({ salt, iv, encryptedData, authTag });
         await fsp.writeFile(saveResult.filePath, finalBuffer);
+
+        if (createdTempDir) {
+            await fsp.rm(createdTempDir, { recursive: true, force: true });
+        }
         return { success: true, outputPath: saveResult.filePath };
     } catch (error) {
+        if (createdTempDir) {
+            try {
+                await fsp.rm(createdTempDir, { recursive: true, force: true });
+            } catch (cleanupError) {
+            }
+        }
         return { success: false, message: error.message };
     }
 });
