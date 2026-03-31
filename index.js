@@ -18,6 +18,10 @@ const ENCRYPTION_MAGIC = Buffer.from('TCLK');
 const ENCRYPTION_VERSION = 1;
 const ENCRYPTED_FILE_EXTENSION = '.tclock';
 const KEY_FILE_EXTENSION = '.tckey';
+const SAFEBOX_FILE_EXTENSION = '.tcsafebox';
+const SAFEBOX_MAGIC = Buffer.from('TCSB');
+const SAFEBOX_VERSION = 1;
+const SAFEBOX_SALT_LENGTH = 16;
 const DISGUISE_MAGIC = Buffer.from('TCDG');
 const DISGUISE_VERSION = 2;
 const DISGUISE_KEY_LENGTH = 32;
@@ -54,6 +58,7 @@ const settingsPath = path.join(app.getPath('userData'), 'settings.json');
 const activeBatchControllers = new Map();
 let mainWindow = null;
 let pendingLaunchAction = null;
+const safeboxSessions = new Map();
 const LAUNCH_ACTIONS = {
     ENCRYPT: 'encrypt',
     CONVERT: 'convert',
@@ -420,6 +425,16 @@ app.whenReady().then(() => {
 
 app.on('window-all-closed', () => {
     if (process.platform !== 'darwin') app.quit();
+});
+
+app.on('before-quit', async () => {
+    const sessionIds = Array.from(safeboxSessions.keys());
+    for (const sessionId of sessionIds) {
+        try {
+            await flushSafeboxSession(sessionId);
+        } catch (error) {
+        }
+    }
 });
 
 // 处理文件选择请求
@@ -823,10 +838,23 @@ function deriveKeyFromPassword(password) {
     return deriveKeyFromMaterial(Buffer.from(password, 'utf8'));
 }
 
-function decryptAesGcmToBuffer(key, iv, authTag, encryptedDataBuffer) {
+function deriveSafeboxKeyFromPassword(password, salt) {
+    return new Promise((resolve, reject) => {
+        crypto.scrypt(password, salt, 32, (err, derivedKey) => {
+            if (err) reject(err);
+            resolve(derivedKey);
+        });
+    });
+}
+
+function decryptAesGcmWithKey(key, iv, authTag, encryptedDataBuffer) {
     const decipher = crypto.createDecipheriv('aes-256-gcm', key, iv, { authTagLength: AUTH_TAG_LENGTH });
     decipher.setAuthTag(authTag);
     return Buffer.concat([decipher.update(encryptedDataBuffer), decipher.final()]);
+}
+
+function decryptAesGcmToBuffer(key, iv, authTag, encryptedDataBuffer) {
+    return decryptAesGcmWithKey(key, iv, authTag, encryptedDataBuffer);
 }
 
 function isLikelyZipBuffer(buffer) {
@@ -898,6 +926,104 @@ async function getDirectoryAsBuffer(dirPath) {
         archive.directory(dirPath, false);
         archive.finalize();
     });
+}
+
+function parseSafeboxFile(fileBuffer) {
+    if (!Buffer.isBuffer(fileBuffer) || fileBuffer.length < SAFEBOX_MAGIC.length + 1 + SAFEBOX_SALT_LENGTH + IV_LENGTH + AUTH_TAG_LENGTH) {
+        throw new Error('Safebox 文件结构无效');
+    }
+    const magic = fileBuffer.subarray(0, SAFEBOX_MAGIC.length);
+    if (!magic.equals(SAFEBOX_MAGIC)) {
+        throw new Error('不是有效的 .tcsafebox 文件');
+    }
+    const version = fileBuffer.readUInt8(SAFEBOX_MAGIC.length);
+    if (version !== SAFEBOX_VERSION) {
+        throw new Error(`不支持的 Safebox 版本: ${version}`);
+    }
+
+    const saltStart = SAFEBOX_MAGIC.length + 1;
+    const ivStart = saltStart + SAFEBOX_SALT_LENGTH;
+    const encryptedStart = ivStart + IV_LENGTH;
+    const authTagStart = fileBuffer.length - AUTH_TAG_LENGTH;
+    if (authTagStart <= encryptedStart) {
+        throw new Error('Safebox 文件内容已损坏');
+    }
+
+    return {
+        salt: fileBuffer.subarray(saltStart, ivStart),
+        iv: fileBuffer.subarray(ivStart, encryptedStart),
+        encryptedData: fileBuffer.subarray(encryptedStart, authTagStart),
+        authTag: fileBuffer.subarray(authTagStart)
+    };
+}
+
+function buildSafeboxFileBuffer({ salt, iv, encryptedData, authTag }) {
+    return Buffer.concat([
+        SAFEBOX_MAGIC,
+        Buffer.from([SAFEBOX_VERSION]),
+        salt,
+        iv,
+        encryptedData,
+        authTag
+    ]);
+}
+
+function getFreeWindowsDriveLetter() {
+    const letters = 'ZYXWVUTSRQPONMLKJIHGFED';
+    for (const letter of letters) {
+        if (!fs.existsSync(`${letter}:\\`)) {
+            return letter;
+        }
+    }
+    return null;
+}
+
+function mountDirectoryToDriveLetter(tempDirPath) {
+    if (process.platform !== 'win32') {
+        throw new Error('虚拟磁盘挂载目前仅支持 Windows');
+    }
+    const freeLetter = getFreeWindowsDriveLetter();
+    if (!freeLetter) {
+        throw new Error('没有可用盘符用于挂载');
+    }
+    execFileSync('subst', [`${freeLetter}:`, tempDirPath], { stdio: 'ignore', windowsHide: true });
+    return freeLetter;
+}
+
+function unmountDriveLetter(driveLetter) {
+    if (process.platform !== 'win32') {
+        return;
+    }
+    execFileSync('subst', [`${driveLetter}:`, '/D'], { stdio: 'ignore', windowsHide: true });
+}
+
+async function flushSafeboxSession(sessionId) {
+    const session = safeboxSessions.get(sessionId);
+    if (!session) {
+        throw new Error('未找到 Safebox 挂载会话');
+    }
+
+    try {
+        unmountDriveLetter(session.driveLetter);
+    } catch (error) {
+    }
+
+    const plainZip = await getDirectoryAsBuffer(session.tempDirPath);
+    const iv = crypto.randomBytes(IV_LENGTH);
+    const cipher = crypto.createCipheriv('aes-256-gcm', session.derivedKey, iv, { authTagLength: AUTH_TAG_LENGTH });
+    const encryptedData = Buffer.concat([cipher.update(plainZip), cipher.final()]);
+    const authTag = cipher.getAuthTag();
+    const finalBuffer = buildSafeboxFileBuffer({
+        salt: session.salt,
+        iv,
+        encryptedData,
+        authTag
+    });
+    const tempOutputPath = `${session.safeboxPath}.tmp`;
+    await fsp.writeFile(tempOutputPath, finalBuffer);
+    await fsp.rename(tempOutputPath, session.safeboxPath);
+    await fsp.rm(session.tempDirPath, { recursive: true, force: true });
+    safeboxSessions.delete(sessionId);
 }
 
 function getSelfDecryptExeTemplatePath() {
@@ -1374,6 +1500,129 @@ ipcMain.handle('disguise-decrypt-file', async (_event, { disguisedFilePath }) =>
     } catch (error) {
         return { success: false, message: error.message };
     }
+});
+
+ipcMain.handle('create-safebox', async (_event, { sourceDirectoryPath, password }) => {
+    try {
+        if (process.platform !== 'win32') {
+            throw new Error('Safebox 功能目前仅支持 Windows');
+        }
+        if (!sourceDirectoryPath) {
+            throw new Error('请先选择要封装的文件夹');
+        }
+        if (typeof password !== 'string' || password.length === 0) {
+            throw new Error('请输入 Safebox 密码');
+        }
+        const stat = await fsp.stat(sourceDirectoryPath);
+        if (!stat.isDirectory()) {
+            throw new Error('Safebox 仅支持将文件夹作为容器内容');
+        }
+
+        const defaultName = `${path.basename(sourceDirectoryPath)}${SAFEBOX_FILE_EXTENSION}`;
+        const saveResult = await dialog.showSaveDialog({
+            title: '保存 Safebox 容器文件',
+            defaultPath: path.join(path.dirname(sourceDirectoryPath), defaultName),
+            filters: [
+                { name: 'TransCrypt Safebox', extensions: [SAFEBOX_FILE_EXTENSION.replace('.', '')] },
+                { name: '所有文件', extensions: ['*'] }
+            ]
+        });
+        if (saveResult.canceled || !saveResult.filePath) {
+            return { success: false, message: '保存已取消' };
+        }
+
+        const salt = crypto.randomBytes(SAFEBOX_SALT_LENGTH);
+        const derivedKey = await deriveSafeboxKeyFromPassword(password, salt);
+        const plainZip = await getDirectoryAsBuffer(sourceDirectoryPath);
+        const iv = crypto.randomBytes(IV_LENGTH);
+        const cipher = crypto.createCipheriv('aes-256-gcm', derivedKey, iv, { authTagLength: AUTH_TAG_LENGTH });
+        const encryptedData = Buffer.concat([cipher.update(plainZip), cipher.final()]);
+        const authTag = cipher.getAuthTag();
+        const finalBuffer = buildSafeboxFileBuffer({ salt, iv, encryptedData, authTag });
+        await fsp.writeFile(saveResult.filePath, finalBuffer);
+        return { success: true, outputPath: saveResult.filePath };
+    } catch (error) {
+        return { success: false, message: error.message };
+    }
+});
+
+ipcMain.handle('mount-safebox', async (_event, { safeboxPath, password }) => {
+    let tempDirPath = null;
+    try {
+        if (process.platform !== 'win32') {
+            throw new Error('Safebox 挂载目前仅支持 Windows');
+        }
+        if (!safeboxPath || !safeboxPath.toLowerCase().endsWith(SAFEBOX_FILE_EXTENSION)) {
+            throw new Error(`请选择 ${SAFEBOX_FILE_EXTENSION} 文件`);
+        }
+        if (typeof password !== 'string' || password.length === 0) {
+            throw new Error('请输入 Safebox 密码');
+        }
+        const existing = Array.from(safeboxSessions.entries()).find(([, value]) => value.safeboxPath === safeboxPath);
+        if (existing) {
+            return {
+                success: true,
+                sessionId: existing[0],
+                driveLetter: existing[1].driveLetter,
+                drivePath: `${existing[1].driveLetter}:\\`,
+                alreadyMounted: true
+            };
+        }
+
+        const fileBuffer = await fsp.readFile(safeboxPath);
+        const parsed = parseSafeboxFile(fileBuffer);
+        const derivedKey = await deriveSafeboxKeyFromPassword(password, parsed.salt);
+        const plainZip = decryptAesGcmWithKey(derivedKey, parsed.iv, parsed.authTag, parsed.encryptedData);
+
+        tempDirPath = path.join(os.tmpdir(), 'TransCryptProSafebox', `${Date.now()}-${Math.random().toString(16).slice(2)}`);
+        await fsp.mkdir(tempDirPath, { recursive: true });
+        await extractZipBufferToDirectory(plainZip, tempDirPath);
+
+        const driveLetter = mountDirectoryToDriveLetter(tempDirPath);
+        const sessionId = crypto.randomUUID();
+        safeboxSessions.set(sessionId, {
+            safeboxPath,
+            tempDirPath,
+            driveLetter,
+            salt: Buffer.from(parsed.salt),
+            derivedKey
+        });
+        return {
+            success: true,
+            sessionId,
+            driveLetter,
+            drivePath: `${driveLetter}:\\`
+        };
+    } catch (error) {
+        if (tempDirPath) {
+            try {
+                await fsp.rm(tempDirPath, { recursive: true, force: true });
+            } catch (cleanupError) {
+            }
+        }
+        return { success: false, message: error.message };
+    }
+});
+
+ipcMain.handle('unmount-safebox', async (_event, { sessionId }) => {
+    try {
+        if (!sessionId) {
+            throw new Error('缺少 sessionId');
+        }
+        await flushSafeboxSession(sessionId);
+        return { success: true };
+    } catch (error) {
+        return { success: false, message: error.message };
+    }
+});
+
+ipcMain.handle('list-safebox-sessions', async () => {
+    return Array.from(safeboxSessions.entries()).map(([sessionId, session]) => ({
+        sessionId,
+        safeboxPath: session.safeboxPath,
+        driveLetter: session.driveLetter,
+        drivePath: `${session.driveLetter}:\\`
+    }));
 });
 
 ipcMain.handle('get-file-info', async (event, filePath) => {

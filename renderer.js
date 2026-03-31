@@ -188,6 +188,7 @@ const categoryNameMap = {
     'encryption': '文件加密',
     'decryption': '文件解密',
     'disguise': '文件伪装加密',
+    'safebox': '虚拟加密磁盘',
     'hash': '文件哈希/校验',
     'settings': '设置'
 };
@@ -1086,6 +1087,59 @@ document.addEventListener('DOMContentLoaded', () => {
         `;
     }
 
+    function loadSafeboxView() {
+        mainContent.innerHTML = `
+            <h1><i class="bi bi-hdd-lock"></i> 虚拟加密磁盘</h1>
+            <div class="operation-container">
+                <div class="form-group">
+                    <label><i class="bi bi-folder2-open"></i> 创建 .tcsafebox（从文件夹封装）:</label>
+                    <div id="safeboxSourceDropZone" class="drop-zone">
+                        <div class="drop-zone-content">
+                            <div class="drop-zone-icon"><i class="bi bi-folder-plus"></i></div>
+                            <div class="drop-zone-text">点击选择文件夹 或 拖拽文件夹到此</div>
+                            <span id="safeboxSourceSelectedName" class="selected-file-name"></span>
+                        </div>
+                    </div>
+                    <button id="selectSafeboxSourceFolderBtn" class="secondary-btn" style="margin-top: 10px;"><i class="bi bi-folder2-open"></i> 选择文件夹</button>
+                </div>
+
+                <div class="form-group">
+                    <label for="safeboxCreatePassword"><i class="bi bi-shield-lock"></i> 容器密码:</label>
+                    <input type="password" id="safeboxCreatePassword" placeholder="用于创建 .tcsafebox 的密码">
+                </div>
+
+                <div class="button-group">
+                    <button id="startSafeboxCreate"><i class="bi bi-file-earmark-lock"></i> 生成 .tcsafebox</button>
+                </div>
+
+                <hr style="margin: 24px 0;">
+
+                <div class="form-group">
+                    <label><i class="bi bi-hdd"></i> 打开 .tcsafebox 为虚拟磁盘:</label>
+                    <div id="safeboxFileDropZone" class="drop-zone">
+                        <div class="drop-zone-content">
+                            <div class="drop-zone-icon"><i class="bi bi-file-earmark-zip"></i></div>
+                            <div class="drop-zone-text">点击选择 .tcsafebox 或拖拽到此</div>
+                            <span id="safeboxFileSelectedName" class="selected-file-name"></span>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="form-group">
+                    <label for="safeboxMountPassword"><i class="bi bi-key"></i> 挂载密码:</label>
+                    <input type="password" id="safeboxMountPassword" placeholder="输入密码解密并挂载">
+                </div>
+
+                <div class="button-group">
+                    <button id="startSafeboxMount"><i class="bi bi-eject"></i> 挂载虚拟磁盘</button>
+                    <button id="startSafeboxUnmount" class="secondary-btn"><i class="bi bi-save2"></i> 弹出并回写加密</button>
+                </div>
+
+                <div id="safeboxSessionInfo" class="conversion-result" style="display: none; margin-top: 20px;"></div>
+            </div>
+        `;
+    }
+
     function bindDisguiseEvents() {
         let sourcePath = null;
         let carrierPath = null;
@@ -1269,6 +1323,204 @@ document.addEventListener('DOMContentLoaded', () => {
             } finally {
                 setOperationBusy(decryptBtn, false);
             }
+        });
+    }
+
+    function bindSafeboxEvents() {
+        let sourceDirectoryPath = null;
+        let safeboxFilePath = null;
+        let mountedSessionId = null;
+        let mountedDrivePath = null;
+
+        const sourceDropZone = document.getElementById('safeboxSourceDropZone');
+        const sourceSelectedName = document.getElementById('safeboxSourceSelectedName');
+        const selectSourceFolderBtn = document.getElementById('selectSafeboxSourceFolderBtn');
+        const createPasswordInput = document.getElementById('safeboxCreatePassword');
+        const mountPasswordInput = document.getElementById('safeboxMountPassword');
+        const safeboxFileDropZone = document.getElementById('safeboxFileDropZone');
+        const safeboxFileSelectedName = document.getElementById('safeboxFileSelectedName');
+        const sessionInfo = document.getElementById('safeboxSessionInfo');
+        const createBtn = document.getElementById('startSafeboxCreate');
+        const mountBtn = document.getElementById('startSafeboxMount');
+        const unmountBtn = document.getElementById('startSafeboxUnmount');
+
+        const renderSession = () => {
+            if (!mountedSessionId || !mountedDrivePath) {
+                sessionInfo.style.display = 'none';
+                sessionInfo.innerHTML = '';
+                return;
+            }
+            sessionInfo.style.display = 'block';
+            sessionInfo.innerHTML = `
+                <div class="conversion-success-card">
+                    <div class="success-header"><i class="bi bi-hdd-fill"></i><span>虚拟磁盘已挂载</span></div>
+                    <div class="result-info">
+                        <div class="meta-item"><span class="meta-label">盘符:</span> ${mountedDrivePath}</div>
+                        <div class="meta-item"><span class="meta-label">容器文件:</span> ${safeboxFilePath || '-'}</div>
+                    </div>
+                    <div class="result-actions">
+                        <button id="safeboxOpenDriveBtn" class="modal-btn modal-btn-primary"><i class="bi bi-box-arrow-up-right"></i> 打开磁盘</button>
+                    </div>
+                </div>
+            `;
+            const openBtn = document.getElementById('safeboxOpenDriveBtn');
+            if (openBtn) {
+                openBtn.addEventListener('click', () => window.electronAPI.openPath(mountedDrivePath));
+            }
+        };
+
+        const bindDrop = (zone, onSelect) => {
+            zone.addEventListener('dragover', (e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                zone.classList.add('dragover');
+            });
+            zone.addEventListener('dragleave', (e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                zone.classList.remove('dragover');
+            });
+            zone.addEventListener('drop', (e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                zone.classList.remove('dragover');
+                const files = e.dataTransfer.files;
+                if (!files || files.length === 0) return;
+                const file = files[0];
+                try {
+                    const filePath = window.electronAPI.getFilePath(file);
+                    if (!filePath) {
+                        showToast('无法获取文件路径', 'error');
+                        return;
+                    }
+                    onSelect(filePath, file.name);
+                } catch (error) {
+                    showToast(`处理拖拽文件失败: ${error.message}`, 'error');
+                }
+            });
+        };
+
+        sourceDropZone.addEventListener('click', async () => {
+            const result = await window.electronAPI.selectPath(['openDirectory']);
+            if (result.success) {
+                sourceDirectoryPath = result.filePath;
+                sourceSelectedName.textContent = `✓ 已选择: ${result.fileName}`;
+            }
+        });
+        selectSourceFolderBtn.addEventListener('click', async () => {
+            const result = await window.electronAPI.selectPath(['openDirectory']);
+            if (result.success) {
+                sourceDirectoryPath = result.filePath;
+                sourceSelectedName.textContent = `✓ 已选择: ${result.fileName}`;
+            }
+        });
+        bindDrop(sourceDropZone, (filePath, fileName) => {
+            sourceDirectoryPath = filePath;
+            sourceSelectedName.textContent = `✓ 已选择: ${fileName}`;
+        });
+
+        safeboxFileDropZone.addEventListener('click', async () => {
+            const result = await window.electronAPI.selectPath(['openFile']);
+            if (result.success) {
+                safeboxFilePath = result.filePath;
+                safeboxFileSelectedName.textContent = `✓ 已选择: ${result.fileName}`;
+            }
+        });
+        bindDrop(safeboxFileDropZone, (filePath, fileName) => {
+            safeboxFilePath = filePath;
+            safeboxFileSelectedName.textContent = `✓ 已选择: ${fileName}`;
+        });
+
+        createBtn.addEventListener('click', async () => {
+            if (!sourceDirectoryPath) {
+                showToast('请先选择文件夹', 'error');
+                return;
+            }
+            const password = createPasswordInput.value || '';
+            if (!password) {
+                showToast('请输入容器密码', 'error');
+                return;
+            }
+            setOperationBusy(createBtn, true, '正在生成');
+            try {
+                const result = await window.electronAPI.createSafebox({
+                    sourceDirectoryPath,
+                    password
+                });
+                if (!result.success) {
+                    showToast(`创建失败: ${result.message}`, 'error');
+                    return;
+                }
+                showToast(`创建成功: ${result.outputPath}`, 'success');
+                safeboxFilePath = result.outputPath;
+                safeboxFileSelectedName.textContent = `✓ 已选择: ${result.outputPath.split(/[\\/]/).pop()}`;
+            } finally {
+                setOperationBusy(createBtn, false);
+            }
+        });
+
+        mountBtn.addEventListener('click', async () => {
+            if (!safeboxFilePath) {
+                showToast('请先选择 .tcsafebox 文件', 'error');
+                return;
+            }
+            const password = mountPasswordInput.value || '';
+            if (!password) {
+                showToast('请输入挂载密码', 'error');
+                return;
+            }
+            setOperationBusy(mountBtn, true, '正在挂载');
+            try {
+                const result = await window.electronAPI.mountSafebox({
+                    safeboxPath: safeboxFilePath,
+                    password
+                });
+                if (!result.success) {
+                    showToast(`挂载失败: ${result.message}`, 'error');
+                    return;
+                }
+                mountedSessionId = result.sessionId;
+                mountedDrivePath = result.drivePath;
+                renderSession();
+                showToast(`挂载成功: ${result.drivePath}`, 'success');
+                window.electronAPI.openPath(result.drivePath);
+            } finally {
+                setOperationBusy(mountBtn, false);
+            }
+        });
+
+        unmountBtn.addEventListener('click', async () => {
+            if (!mountedSessionId) {
+                showToast('当前没有已挂载的 Safebox', 'info');
+                return;
+            }
+            setOperationBusy(unmountBtn, true, '正在弹出');
+            try {
+                const result = await window.electronAPI.unmountSafebox({ sessionId: mountedSessionId });
+                if (!result.success) {
+                    showToast(`弹出失败: ${result.message}`, 'error');
+                    return;
+                }
+                showToast('已弹出并回写加密', 'success');
+                mountedSessionId = null;
+                mountedDrivePath = null;
+                renderSession();
+            } finally {
+                setOperationBusy(unmountBtn, false);
+            }
+        });
+
+        window.electronAPI.listSafeboxSessions().then((sessions) => {
+            if (!Array.isArray(sessions) || sessions.length === 0) {
+                return;
+            }
+            const session = sessions[0];
+            mountedSessionId = session.sessionId;
+            mountedDrivePath = session.drivePath;
+            safeboxFilePath = session.safeboxPath;
+            safeboxFileSelectedName.textContent = `✓ 已选择: ${session.safeboxPath.split(/[\\/]/).pop()}`;
+            renderSession();
+        }).catch(() => {
         });
     }
 
@@ -2315,6 +2567,11 @@ document.addEventListener('DOMContentLoaded', () => {
         if (category === 'disguise') {
             loadDisguiseView();
             bindDisguiseEvents();
+            return;
+        }
+        if (category === 'safebox') {
+            loadSafeboxView();
+            bindSafeboxEvents();
             return;
         }
         if (category === 'hash') {

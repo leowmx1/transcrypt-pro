@@ -1263,7 +1263,9 @@ select:disabled {
 #startDecryption,
 #calculateHashBtn,
 #startDisguiseEncryption,
-#startDisguiseDecryption {
+#startDisguiseDecryption,
+#startSafeboxCreate,
+#startSafeboxMount {
     width: auto;
     flex: 1;
     padding: 14px;
@@ -1299,7 +1301,9 @@ select:disabled {
 #startDecryption:disabled,
 #calculateHashBtn:disabled,
 #startDisguiseEncryption:disabled,
-#startDisguiseDecryption:disabled {
+#startDisguiseDecryption:disabled,
+#startSafeboxCreate:disabled,
+#startSafeboxMount:disabled {
     background-color: #9ca3af;
     cursor: not-allowed;
     transform: none;
