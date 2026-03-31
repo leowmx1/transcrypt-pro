@@ -18,6 +18,13 @@ const ENCRYPTION_MAGIC = Buffer.from('TCLK');
 const ENCRYPTION_VERSION = 1;
 const ENCRYPTED_FILE_EXTENSION = '.tclock';
 const KEY_FILE_EXTENSION = '.tckey';
+const DISGUISE_MAGIC = Buffer.from('TCDG');
+const DISGUISE_VERSION = 2;
+const DISGUISE_KEY_LENGTH = 32;
+const DISGUISE_MODE_FILE = 0;
+const DISGUISE_MODE_DIRECTORY = 1;
+const DISGUISE_TAIL_LENGTH_V1 = 8 + 2 + 1 + 4; // encryptedLen + nameLen + version + magic
+const DISGUISE_TAIL_LENGTH = 8 + 2 + 1 + 1 + 4; // encryptedLen + nameLen + modeFlag + version + magic
 
 // Self-decrypt exe container footer format (Windows-only feature)
 // [template][encrypted(tclock bytes)][name bytes][encLen(8)][nameLen(2)][version(1)][magic(4)]
@@ -948,6 +955,58 @@ async function buildSelfDecryptExeFromTemplate({ templatePath, encryptedFilePath
     });
 }
 
+function parseDisguisedContainer(fileBuffer) {
+    if (!Buffer.isBuffer(fileBuffer) || fileBuffer.length < DISGUISE_TAIL_LENGTH_V1) {
+        throw new Error('伪装加密文件结构无效');
+    }
+
+    const magic = fileBuffer.subarray(fileBuffer.length - 4, fileBuffer.length);
+    const version = fileBuffer.readUInt8(fileBuffer.length - 5);
+
+    if (!magic.equals(DISGUISE_MAGIC)) {
+        throw new Error('未检测到伪装加密标记');
+    }
+    let tailOffset;
+    let modeFlag = DISGUISE_MODE_FILE;
+    let nameLength;
+    let encryptedLengthBig;
+
+    if (version === 1) {
+        tailOffset = fileBuffer.length - DISGUISE_TAIL_LENGTH_V1;
+        encryptedLengthBig = fileBuffer.readBigUInt64LE(tailOffset);
+        nameLength = fileBuffer.readUInt16LE(tailOffset + 8);
+    } else if (version === DISGUISE_VERSION) {
+        tailOffset = fileBuffer.length - DISGUISE_TAIL_LENGTH;
+        encryptedLengthBig = fileBuffer.readBigUInt64LE(tailOffset);
+        nameLength = fileBuffer.readUInt16LE(tailOffset + 8);
+        modeFlag = fileBuffer.readUInt8(tailOffset + 10);
+    } else {
+        throw new Error(`不支持的伪装加密版本: ${version}`);
+    }
+
+    if (nameLength <= 0) throw new Error('伪装加密文件缺少原始文件名');
+    if (encryptedLengthBig > BigInt(Number.MAX_SAFE_INTEGER)) throw new Error('伪装加密内容过大');
+
+    const encryptedLength = Number(encryptedLengthBig);
+    const cryptoMetaLength = DISGUISE_KEY_LENGTH + IV_LENGTH + AUTH_TAG_LENGTH;
+    const nameStart = tailOffset - nameLength;
+    const keyStart = nameStart - cryptoMetaLength;
+    const encryptedStart = keyStart - encryptedLength;
+    if (encryptedStart < 0 || keyStart < 0 || nameStart < 0) throw new Error('伪装加密文件结构损坏');
+
+    return {
+        originalName: fileBuffer.subarray(nameStart, tailOffset).toString('utf8'),
+        key: fileBuffer.subarray(keyStart, keyStart + DISGUISE_KEY_LENGTH),
+        iv: fileBuffer.subarray(keyStart + DISGUISE_KEY_LENGTH, keyStart + DISGUISE_KEY_LENGTH + IV_LENGTH),
+        authTag: fileBuffer.subarray(
+            keyStart + DISGUISE_KEY_LENGTH + IV_LENGTH,
+            keyStart + DISGUISE_KEY_LENGTH + IV_LENGTH + AUTH_TAG_LENGTH
+        ),
+        encryptedData: fileBuffer.subarray(encryptedStart, keyStart),
+        modeFlag
+    };
+}
+
 ipcMain.handle('encrypt-file', async (event, { filePath, algorithm, keyOption, keyFilePath, password, outputOption }) => {
     try {
         const resolvedOutputOption = outputOption || 'tclock';
@@ -1209,6 +1268,109 @@ ipcMain.handle('decrypt-file', async (event, { filePath, algorithm, keyOption, k
 
         return { success: true, outputPath };
 
+    } catch (error) {
+        return { success: false, message: error.message };
+    }
+});
+
+ipcMain.handle('disguise-encrypt-file', async (_event, { sourceFilePath, carrierFilePath }) => {
+    try {
+        if (!sourceFilePath || !carrierFilePath) {
+            throw new Error('请同时提供被加密文件和载体文件');
+        }
+
+        const sourceStat = await fsp.stat(sourceFilePath);
+        const carrierStat = await fsp.stat(carrierFilePath);
+        if (!carrierStat.isFile()) {
+            throw new Error('载体仅支持文件');
+        }
+        if (!sourceStat.isFile() && !sourceStat.isDirectory()) {
+            throw new Error('被加密路径仅支持文件或文件夹');
+        }
+
+        const isSourceDirectory = sourceStat.isDirectory();
+        const sourceBuffer = isSourceDirectory
+            ? await getDirectoryAsBuffer(sourceFilePath)
+            : await fsp.readFile(sourceFilePath);
+        const carrierBuffer = await fsp.readFile(carrierFilePath);
+        const key = crypto.randomBytes(DISGUISE_KEY_LENGTH);
+        const iv = crypto.randomBytes(IV_LENGTH);
+        const cipher = crypto.createCipheriv('aes-256-gcm', key, iv, { authTagLength: AUTH_TAG_LENGTH });
+        const encryptedData = Buffer.concat([cipher.update(sourceBuffer), cipher.final()]);
+        const authTag = cipher.getAuthTag();
+        const originalNameBytes = Buffer.from(path.basename(sourceFilePath), 'utf8');
+
+        if (originalNameBytes.length > 0xffff) {
+            throw new Error('原始文件名过长，无法写入伪装加密信息');
+        }
+
+        const tail = Buffer.alloc(DISGUISE_TAIL_LENGTH);
+        tail.writeBigUInt64LE(BigInt(encryptedData.length), 0);
+        tail.writeUInt16LE(originalNameBytes.length, 8);
+        tail.writeUInt8(isSourceDirectory ? DISGUISE_MODE_DIRECTORY : DISGUISE_MODE_FILE, 10);
+        tail.writeUInt8(DISGUISE_VERSION, 11);
+        DISGUISE_MAGIC.copy(tail, 12);
+
+        const carrierExt = path.extname(carrierFilePath);
+        const carrierBase = path.basename(carrierFilePath, carrierExt);
+        const saveResult = await dialog.showSaveDialog({
+            title: '保存伪装加密文件',
+            defaultPath: path.join(path.dirname(carrierFilePath), `${carrierBase}_masked${carrierExt}`),
+            filters: [{ name: '所有文件', extensions: ['*'] }]
+        });
+        if (saveResult.canceled || !saveResult.filePath) {
+            return { success: false, message: '伪装加密文件保存已取消' };
+        }
+
+        const outputBuffer = Buffer.concat([
+            carrierBuffer,
+            encryptedData,
+            key,
+            iv,
+            authTag,
+            originalNameBytes,
+            tail
+        ]);
+        await fsp.writeFile(saveResult.filePath, outputBuffer);
+        return { success: true, outputPath: saveResult.filePath };
+    } catch (error) {
+        return { success: false, message: error.message };
+    }
+});
+
+ipcMain.handle('disguise-decrypt-file', async (_event, { disguisedFilePath }) => {
+    try {
+        if (!disguisedFilePath) {
+            throw new Error('未提供伪装加密文件');
+        }
+        const fileBuffer = await fsp.readFile(disguisedFilePath);
+        const { originalName, key, iv, authTag, encryptedData, modeFlag } = parseDisguisedContainer(fileBuffer);
+        const decryptedBuffer = decryptAesGcmToBuffer(key, iv, authTag, encryptedData);
+        const outputDir = path.dirname(disguisedFilePath);
+
+        if (modeFlag === DISGUISE_MODE_DIRECTORY) {
+            const result = await dialog.showSaveDialog({
+                title: '保存解密后的文件夹',
+                defaultPath: path.join(outputDir, originalName || 'restored-folder')
+            });
+            if (result.canceled || !result.filePath) {
+                return { success: false, message: '解密文件夹保存已取消' };
+            }
+            await fsp.mkdir(result.filePath, { recursive: true });
+            await extractZipBufferToDirectory(decryptedBuffer, result.filePath);
+            return { success: true, outputPath: result.filePath };
+        }
+
+        const saveResult = await dialog.showSaveDialog({
+            title: '保存解密后的文件',
+            defaultPath: path.join(outputDir, originalName || 'restored-file')
+        });
+        if (saveResult.canceled || !saveResult.filePath) {
+            return { success: false, message: '解密文件保存已取消' };
+        }
+
+        await fsp.writeFile(saveResult.filePath, decryptedBuffer);
+        return { success: true, outputPath: saveResult.filePath };
     } catch (error) {
         return { success: false, message: error.message };
     }

@@ -187,6 +187,7 @@ const categoryNameMap = {
     'documents': '文档',
     'encryption': '文件加密',
     'decryption': '文件解密',
+    'disguise': '文件伪装加密',
     'hash': '文件哈希/校验',
     'settings': '设置'
 };
@@ -1036,6 +1037,239 @@ document.addEventListener('DOMContentLoaded', () => {
                 </div>
             </div>
         `;
+    }
+
+    function loadDisguiseView() {
+        mainContent.innerHTML = `
+            <h1><i class="bi bi-file-earmark-lock2"></i> 文件伪装加密</h1>
+            <div class="operation-container">
+                <div class="form-group">
+                    <label><i class="bi bi-file-lock"></i> 选择要被加密的文件/文件夹:</label>
+                    <div id="disguiseSourceDropZone" class="drop-zone">
+                        <div class="drop-zone-content">
+                            <div class="drop-zone-icon"><i class="bi bi-file-arrow-down"></i></div>
+                            <div class="drop-zone-text">点击选择文件 或 拖拽文件/文件夹到此</div>
+                            <span id="disguiseSourceSelectedName" class="selected-file-name"></span>
+                        </div>
+                    </div>
+                    <button id="selectDisguiseSourceFolderBtn" class="secondary-btn" style="margin-top: 10px;"><i class="bi bi-folder2-open"></i> 选择文件夹</button>
+                </div>
+                <div class="form-group">
+                    <label><i class="bi bi-file-earmark"></i> 选择载体文件:</label>
+                    <div id="disguiseCarrierDropZone" class="drop-zone">
+                        <div class="drop-zone-content">
+                            <div class="drop-zone-icon"><i class="bi bi-file-arrow-down"></i></div>
+                            <div class="drop-zone-text">点击选择文件 或 拖拽载体文件到此</div>
+                            <span id="disguiseCarrierSelectedName" class="selected-file-name"></span>
+                        </div>
+                    </div>
+                    <div class="setting-description">若选择文件夹，会先自动压缩后再伪装加密；密钥随机生成并存于尾部，解密自动提取。</div>
+                </div>
+                <div class="button-group">
+                    <button id="startDisguiseEncryption" class="primary-btn"><i class="bi bi-play-circle"></i> 开始伪装加密</button>
+                </div>
+                <hr style="margin: 24px 0;">
+                <div class="form-group">
+                    <label><i class="bi bi-file-earmark-zip"></i> 选择要解密的伪装文件:</label>
+                    <div id="disguiseEncryptedDropZone" class="drop-zone">
+                        <div class="drop-zone-content">
+                            <div class="drop-zone-icon"><i class="bi bi-file-arrow-down"></i></div>
+                            <div class="drop-zone-text">点击选择文件 或 拖拽伪装文件到此</div>
+                            <span id="disguiseEncryptedSelectedName" class="selected-file-name"></span>
+                        </div>
+                    </div>
+                </div>
+                <div class="button-group">
+                    <button id="startDisguiseDecryption" class="primary-btn"><i class="bi bi-play-circle"></i> 开始自动解密</button>
+                </div>
+            </div>
+        `;
+    }
+
+    function bindDisguiseEvents() {
+        let sourcePath = null;
+        let carrierPath = null;
+        let encryptedPath = null;
+
+        const sourceDropZone = document.getElementById('disguiseSourceDropZone');
+        const carrierDropZone = document.getElementById('disguiseCarrierDropZone');
+        const encryptedDropZone = document.getElementById('disguiseEncryptedDropZone');
+        const sourceSelectedName = document.getElementById('disguiseSourceSelectedName');
+        const carrierSelectedName = document.getElementById('disguiseCarrierSelectedName');
+        const encryptedSelectedName = document.getElementById('disguiseEncryptedSelectedName');
+        const selectSourceFolderBtn = document.getElementById('selectDisguiseSourceFolderBtn');
+        const encryptBtn = document.getElementById('startDisguiseEncryption');
+        const decryptBtn = document.getElementById('startDisguiseDecryption');
+        const validateCarrierAsFile = async (candidatePath) => {
+            const info = await window.electronAPI.getFileInfo(candidatePath);
+            if (!info) {
+                showToast('载体仅支持文件，请勿选择文件夹', 'error');
+                return false;
+            }
+            return true;
+        };
+
+        sourceDropZone.addEventListener('click', async () => {
+            const result = await window.electronAPI.selectPath(['openFile']);
+            if (result.success) {
+                sourcePath = result.filePath;
+                sourceSelectedName.textContent = `✓ 已选择: ${result.fileName}`;
+            }
+        });
+
+        selectSourceFolderBtn.addEventListener('click', async () => {
+            const result = await window.electronAPI.selectPath(['openDirectory']);
+            if (result.success) {
+                sourcePath = result.filePath;
+                sourceSelectedName.textContent = `✓ 已选择: ${result.fileName}`;
+            }
+        });
+
+        carrierDropZone.addEventListener('click', async () => {
+            const result = await window.electronAPI.selectPath(['openFile']);
+            if (result.success) {
+                if (await validateCarrierAsFile(result.filePath)) {
+                    carrierPath = result.filePath;
+                    carrierSelectedName.textContent = `✓ 已选择: ${result.fileName}`;
+                }
+            }
+        });
+
+        encryptedDropZone.addEventListener('click', async () => {
+            const result = await window.electronAPI.selectPath(['openFile']);
+            if (result.success) {
+                encryptedPath = result.filePath;
+                encryptedSelectedName.textContent = `✓ 已选择: ${result.fileName}`;
+            }
+        });
+
+        const bindDrop = (zone, onSelect) => {
+            zone.addEventListener('dragover', (e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                zone.classList.add('dragover');
+            });
+            zone.addEventListener('dragleave', (e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                zone.classList.remove('dragover');
+            });
+            zone.addEventListener('drop', (e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                zone.classList.remove('dragover');
+                const files = e.dataTransfer.files;
+                if (!files || files.length === 0) return;
+                const file = files[0];
+                try {
+                    const filePath = window.electronAPI.getFilePath(file);
+                    if (!filePath) {
+                        showToast('无法获取文件路径', 'error');
+                        return;
+                    }
+                    onSelect(filePath, file.name);
+                } catch (error) {
+                    showToast(`处理拖拽文件失败: ${error.message}`, 'error');
+                }
+            });
+        };
+
+        bindDrop(sourceDropZone, (filePath, fileName) => {
+            sourcePath = filePath;
+            sourceSelectedName.textContent = `✓ 已选择: ${fileName}`;
+        });
+        bindDrop(carrierDropZone, (filePath, fileName) => {
+            validateCarrierAsFile(filePath).then((ok) => {
+                if (!ok) return;
+                carrierPath = filePath;
+                carrierSelectedName.textContent = `✓ 已选择: ${fileName}`;
+            });
+        });
+        bindDrop(encryptedDropZone, (filePath, fileName) => {
+            encryptedPath = filePath;
+            encryptedSelectedName.textContent = `✓ 已选择: ${fileName}`;
+        });
+
+        encryptBtn.addEventListener('click', async () => {
+            const sourceFilePath = sourcePath;
+            const carrierFilePath = carrierPath;
+            if (!sourceFilePath || !carrierFilePath) {
+                showToast('请先选择被加密文件/文件夹和载体文件', 'error');
+                return;
+            }
+            setOperationBusy(encryptBtn, true, '正在加密');
+            try {
+                const result = await window.electronAPI.disguiseEncryptFile({ sourceFilePath, carrierFilePath });
+                if (!result.success) {
+                    showToast(`伪装加密失败: ${result.message}`, 'error');
+                    return;
+                }
+                showToast(`伪装加密成功：${result.outputPath}`, 'success');
+                showOperationResultPage({
+                    title: '伪装加密完成',
+                    subtitle: result.outputPath.split(/[\\/]/).pop(),
+                    status: 'success',
+                    contentHtml: `
+                        <div class="conversion-success-card">
+                            <div class="success-header"><i class="bi bi-check-circle-fill"></i><span>伪装加密完成</span></div>
+                            <div class="result-info"><div class="meta-item"><span class="meta-label">输出文件:</span> ${result.outputPath}</div></div>
+                            <div class="result-actions">
+                                <button id="dsgShowInFolderBtn" class="secondary-btn"><i class="bi bi-folder2-open"></i> 在文件夹中显示</button>
+                                <button id="dsgOpenPathBtn" class="modal-btn modal-btn-primary"><i class="bi bi-box-arrow-up-right"></i> 打开文件</button>
+                            </div>
+                        </div>
+                    `,
+                    actionBindings: [
+                        { selector: '#dsgShowInFolderBtn', handler: () => window.electronAPI.showItemInFolder(result.outputPath) },
+                        { selector: '#dsgOpenPathBtn', handler: () => window.electronAPI.openPath(result.outputPath) }
+                    ]
+                });
+            } catch (error) {
+                showToast(`伪装加密异常: ${error.message}`, 'error');
+            } finally {
+                setOperationBusy(encryptBtn, false);
+            }
+        });
+
+        decryptBtn.addEventListener('click', async () => {
+            const disguisedFilePath = encryptedPath;
+            if (!disguisedFilePath) {
+                showToast('请先选择伪装加密文件', 'error');
+                return;
+            }
+            setOperationBusy(decryptBtn, true, '正在解密');
+            try {
+                const result = await window.electronAPI.disguiseDecryptFile({ disguisedFilePath });
+                if (!result.success) {
+                    showToast(`自动解密失败: ${result.message}`, 'error');
+                    return;
+                }
+                showToast(`自动解密成功：${result.outputPath}`, 'success');
+                showOperationResultPage({
+                    title: '自动解密完成',
+                    subtitle: result.outputPath.split(/[\\/]/).pop(),
+                    status: 'success',
+                    contentHtml: `
+                        <div class="conversion-success-card">
+                            <div class="success-header"><i class="bi bi-check-circle-fill"></i><span>自动解密完成</span></div>
+                            <div class="result-info"><div class="meta-item"><span class="meta-label">输出文件:</span> ${result.outputPath}</div></div>
+                            <div class="result-actions">
+                                <button id="dsgDecShowInFolderBtn" class="secondary-btn"><i class="bi bi-folder2-open"></i> 在文件夹中显示</button>
+                                <button id="dsgDecOpenPathBtn" class="modal-btn modal-btn-primary"><i class="bi bi-box-arrow-up-right"></i> 打开文件</button>
+                            </div>
+                        </div>
+                    `,
+                    actionBindings: [
+                        { selector: '#dsgDecShowInFolderBtn', handler: () => window.electronAPI.showItemInFolder(result.outputPath) },
+                        { selector: '#dsgDecOpenPathBtn', handler: () => window.electronAPI.openPath(result.outputPath) }
+                    ]
+                });
+            } catch (error) {
+                showToast(`自动解密异常: ${error.message}`, 'error');
+            } finally {
+                setOperationBusy(decryptBtn, false);
+            }
+        });
     }
 
 
@@ -2076,6 +2310,11 @@ document.addEventListener('DOMContentLoaded', () => {
         if (category === 'decryption') {
             loadDecryptionView();
             bindDecryptionEvents();
+            return;
+        }
+        if (category === 'disguise') {
+            loadDisguiseView();
+            bindDisguiseEvents();
             return;
         }
         if (category === 'hash') {

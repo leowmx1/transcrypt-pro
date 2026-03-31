@@ -1261,7 +1261,9 @@ select:disabled {
 
 #startEncryption,
 #startDecryption,
-#calculateHashBtn {
+#calculateHashBtn,
+#startDisguiseEncryption,
+#startDisguiseDecryption {
     width: auto;
     flex: 1;
     padding: 14px;
@@ -1295,7 +1297,9 @@ select:disabled {
 
 #startEncryption:disabled,
 #startDecryption:disabled,
-#calculateHashBtn:disabled {
+#calculateHashBtn:disabled,
+#startDisguiseEncryption:disabled,
+#startDisguiseDecryption:disabled {
     background-color: #9ca3af;
     cursor: not-allowed;
     transform: none;

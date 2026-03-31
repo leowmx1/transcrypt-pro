@@ -29,6 +29,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
     onBatchProgress: (callback) => ipcRenderer.on('batch-conversion-progress', (_event, payload) => callback(payload)),
     encryptFile: (options) => ipcRenderer.invoke('encrypt-file', options),
     decryptFile: (options) => ipcRenderer.invoke('decrypt-file', options),
+    disguiseEncryptFile: (options) => ipcRenderer.invoke('disguise-encrypt-file', options),
+    disguiseDecryptFile: (options) => ipcRenderer.invoke('disguise-decrypt-file', options),
     calculateHash: (filePath, algorithm) => ipcRenderer.invoke('calculate-hash', { filePath, algorithm }),
     consumePendingLaunchAction: () => ipcRenderer.invoke('consume-pending-launch-action'),
     onLaunchContextAction: (callback) => ipcRenderer.on('launch-context-action', (_event, payload) => callback(payload)),
