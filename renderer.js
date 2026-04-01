@@ -914,6 +914,7 @@ document.addEventListener('DOMContentLoaded', () => {
                     <label for="encAlgorithm"><i class="bi bi-shield-shaded"></i> 加密算法:</label>
                     <select id="encAlgorithm">
                         <option value="aes-256-gcm">AES-256-GCM (推荐)</option>
+                        <option value="xchacha20-poly1305">XChaCha20-Poly1305</option>
                     </select>
                 </div>
 
@@ -1007,6 +1008,7 @@ document.addEventListener('DOMContentLoaded', () => {
                     <label for="decAlgorithm"><i class="bi bi-shield-shaded"></i> 加密算法:</label>
                     <select id="decAlgorithm">
                         <option value="aes-256-gcm">AES-256-GCM (推荐)</option>
+                        <option value="xchacha20-poly1305">XChaCha20-Poly1305</option>
                     </select>
                 </div>
 
@@ -1855,6 +1857,10 @@ document.addEventListener('DOMContentLoaded', () => {
             const password = passwordKeyInput ? passwordKeyInput.value : '';
             if (outputOption === 'exe' && keyOption !== 'password') {
                 showToast('自解密 exe 模式仅支持密码', 'error');
+                return;
+            }
+            if (outputOption === 'exe' && algorithm === 'xchacha20-poly1305') {
+                showToast('自解密 exe 暂不支持 XChaCha20，请选择 AES-256-GCM', 'error');
                 return;
             }
             if (keyOption === 'file' && !keyFilePath) {

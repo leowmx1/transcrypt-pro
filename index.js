@@ -10,12 +10,19 @@ const { execSync, execFileSync } = require('child_process');
 const crypto = require('crypto');
 const archiver = require('archiver');
 const yauzl = require('yauzl');
+const sodium = require('libsodium-wrappers-sumo');
 const { createBatchController, runWithConcurrency } = require('./batchConversion');
 
 const IV_LENGTH = 12; // 96 bits for GCM
 const AUTH_TAG_LENGTH = 16; // GCM auth tag
+const XCHACHA_NONCE_LENGTH = 24;
 const ENCRYPTION_MAGIC = Buffer.from('TCLK');
-const ENCRYPTION_VERSION = 1;
+const ENCRYPTION_VERSION_V1 = 1;
+const ENCRYPTION_VERSION_V2 = 2;
+const ENCRYPTION_ALGORITHM_AES_256_GCM = 'aes-256-gcm';
+const ENCRYPTION_ALGORITHM_XCHACHA20 = 'xchacha20-poly1305';
+const ENCRYPTION_ALGORITHM_ID_AES_256_GCM = 1;
+const ENCRYPTION_ALGORITHM_ID_XCHACHA20 = 2;
 const ENCRYPTED_FILE_EXTENSION = '.tclock';
 const KEY_FILE_EXTENSION = '.tckey';
 const SAFEBOX_FILE_EXTENSION = '.tcsafebox';
@@ -895,6 +902,113 @@ function deriveSafeboxKeyFromMaterial(keyMaterial, salt) {
     });
 }
 
+let sodiumReadyPromise = null;
+
+async function getSodium() {
+    if (!sodiumReadyPromise) {
+        sodiumReadyPromise = sodium.ready.then(() => sodium);
+    }
+    return sodiumReadyPromise;
+}
+
+function resolveEncryptionAlgorithm(algorithm) {
+    return algorithm === ENCRYPTION_ALGORITHM_XCHACHA20
+        ? ENCRYPTION_ALGORITHM_XCHACHA20
+        : ENCRYPTION_ALGORITHM_AES_256_GCM;
+}
+
+function getAlgorithmIdByName(algorithm) {
+    return algorithm === ENCRYPTION_ALGORITHM_XCHACHA20
+        ? ENCRYPTION_ALGORITHM_ID_XCHACHA20
+        : ENCRYPTION_ALGORITHM_ID_AES_256_GCM;
+}
+
+function getAlgorithmNameById(algorithmId) {
+    if (algorithmId === ENCRYPTION_ALGORITHM_ID_AES_256_GCM) {
+        return ENCRYPTION_ALGORITHM_AES_256_GCM;
+    }
+    if (algorithmId === ENCRYPTION_ALGORITHM_ID_XCHACHA20) {
+        return ENCRYPTION_ALGORITHM_XCHACHA20;
+    }
+    throw new Error(`不支持的加密算法标识: ${algorithmId}`);
+}
+
+function getNonceLengthByAlgorithm(algorithm) {
+    return algorithm === ENCRYPTION_ALGORITHM_XCHACHA20 ? XCHACHA_NONCE_LENGTH : IV_LENGTH;
+}
+
+async function encryptXChaCha20ToBuffer(key, nonce, plainBuffer) {
+    const sodiumModule = await getSodium();
+    const cipherWithTag = sodiumModule.crypto_aead_xchacha20poly1305_ietf_encrypt(
+        plainBuffer,
+        null,
+        null,
+        nonce,
+        key
+    );
+    const combined = Buffer.from(cipherWithTag);
+    return {
+        encryptedData: combined.subarray(0, combined.length - AUTH_TAG_LENGTH),
+        authTag: combined.subarray(combined.length - AUTH_TAG_LENGTH)
+    };
+}
+
+async function decryptXChaCha20ToBuffer(key, nonce, authTag, encryptedDataBuffer) {
+    const sodiumModule = await getSodium();
+    const combined = Buffer.concat([encryptedDataBuffer, authTag]);
+    const plain = sodiumModule.crypto_aead_xchacha20poly1305_ietf_decrypt(
+        null,
+        combined,
+        null,
+        nonce,
+        key
+    );
+    return Buffer.from(plain);
+}
+
+function parseEncryptedFileMeta(fileBuffer) {
+    const minimumLegacyLength = ENCRYPTION_MAGIC.length + 2 + IV_LENGTH + AUTH_TAG_LENGTH;
+    if (fileBuffer.length >= minimumLegacyLength && fileBuffer.subarray(0, ENCRYPTION_MAGIC.length).equals(ENCRYPTION_MAGIC)) {
+        const version = fileBuffer[ENCRYPTION_MAGIC.length];
+        if (version === ENCRYPTION_VERSION_V1) {
+            const modeFlag = fileBuffer[ENCRYPTION_MAGIC.length + 1];
+            const headerOffset = ENCRYPTION_MAGIC.length + 2;
+            return {
+                version,
+                modeFlag,
+                algorithm: ENCRYPTION_ALGORITHM_AES_256_GCM,
+                nonceLength: IV_LENGTH,
+                nonceOffset: headerOffset,
+                headerOffset
+            };
+        }
+        if (version === ENCRYPTION_VERSION_V2) {
+            const modeFlag = fileBuffer[ENCRYPTION_MAGIC.length + 1];
+            const algorithmId = fileBuffer[ENCRYPTION_MAGIC.length + 2];
+            const algorithm = getAlgorithmNameById(algorithmId);
+            const nonceLength = getNonceLengthByAlgorithm(algorithm);
+            const headerOffset = ENCRYPTION_MAGIC.length + 3;
+            return {
+                version,
+                modeFlag,
+                algorithm,
+                nonceLength,
+                nonceOffset: headerOffset,
+                headerOffset
+            };
+        }
+        throw new Error(`不支持的加密版本: ${version}`);
+    }
+    return {
+        version: 0,
+        modeFlag: null,
+        algorithm: ENCRYPTION_ALGORITHM_AES_256_GCM,
+        nonceLength: IV_LENGTH,
+        nonceOffset: 0,
+        headerOffset: 0
+    };
+}
+
 function decryptAesGcmWithKey(key, iv, authTag, encryptedDataBuffer) {
     const decipher = crypto.createDecipheriv('aes-256-gcm', key, iv, { authTagLength: AUTH_TAG_LENGTH });
     decipher.setAuthTag(authTag);
@@ -1376,6 +1490,10 @@ function parseDisguisedContainer(fileBuffer) {
 ipcMain.handle('encrypt-file', async (event, { filePath, algorithm, keyOption, keyFilePath, password, outputOption }) => {
     try {
         const resolvedOutputOption = outputOption || 'tclock';
+        const resolvedAlgorithm = resolveEncryptionAlgorithm(algorithm);
+        if (resolvedOutputOption === 'exe' && resolvedAlgorithm !== ENCRYPTION_ALGORITHM_AES_256_GCM) {
+            throw new Error('自解密 exe 暂不支持 XChaCha20，请选择 AES-256-GCM');
+        }
 
         let key;
         if (resolvedOutputOption === 'exe') {
@@ -1414,14 +1532,13 @@ ipcMain.handle('encrypt-file', async (event, { filePath, algorithm, keyOption, k
 
         const originalName = path.basename(filePath);
 
-        const iv = crypto.randomBytes(12);
-        const cipher = crypto.createCipheriv('aes-256-gcm', key, iv, { authTagLength: 16 });
-        const header = Buffer.concat([ENCRYPTION_MAGIC, Buffer.from([ENCRYPTION_VERSION, isDirectory ? 1 : 0]), iv]);
-
         // exe mode: encrypt to temp tclock first, then append into decryptor template exe.
         let outputPath = null;
         let tempEncryptedPath = null;
         if (resolvedOutputOption === 'exe') {
+            const iv = crypto.randomBytes(IV_LENGTH);
+            const cipher = crypto.createCipheriv(ENCRYPTION_ALGORITHM_AES_256_GCM, key, iv, { authTagLength: AUTH_TAG_LENGTH });
+            const header = Buffer.concat([ENCRYPTION_MAGIC, Buffer.from([ENCRYPTION_VERSION_V1, isDirectory ? 1 : 0]), iv]);
             const templatePath = getSelfDecryptExeTemplatePath();
             if (!templatePath) {
                 throw new Error(
@@ -1499,28 +1616,45 @@ ipcMain.handle('encrypt-file', async (event, { filePath, algorithm, keyOption, k
 
         if (saveResult.canceled) return { success: false, message: '加密文件保存已取消' };
         outputPath = saveResult.filePath;
-
-        const writeStream = fs.createWriteStream(outputPath);
-        writeStream.write(header);
-
-        if (isDirectory) {
-            const archive = archiver('zip', { zlib: { level: 9 } });
-            archive.pipe(cipher).pipe(writeStream);
-            archive.directory(filePath, false);
-            await archive.finalize();
+        if (resolvedAlgorithm === ENCRYPTION_ALGORITHM_XCHACHA20) {
+            const plainData = isDirectory
+                ? await getDirectoryAsBuffer(filePath)
+                : await fsp.readFile(filePath);
+            const nonce = crypto.randomBytes(XCHACHA_NONCE_LENGTH);
+            const encrypted = await encryptXChaCha20ToBuffer(key, nonce, plainData);
+            const header = Buffer.concat([
+                ENCRYPTION_MAGIC,
+                Buffer.from([ENCRYPTION_VERSION_V2, isDirectory ? 1 : 0, ENCRYPTION_ALGORITHM_ID_XCHACHA20]),
+                nonce
+            ]);
+            const finalBuffer = Buffer.concat([header, encrypted.encryptedData, encrypted.authTag]);
+            await fsp.writeFile(outputPath, finalBuffer);
         } else {
-            const readStream = fs.createReadStream(filePath);
-            readStream.pipe(cipher).pipe(writeStream);
-        }
+            const iv = crypto.randomBytes(IV_LENGTH);
+            const cipher = crypto.createCipheriv(ENCRYPTION_ALGORITHM_AES_256_GCM, key, iv, { authTagLength: AUTH_TAG_LENGTH });
+            const header = Buffer.concat([ENCRYPTION_MAGIC, Buffer.from([ENCRYPTION_VERSION_V1, isDirectory ? 1 : 0]), iv]);
+            const writeStream = fs.createWriteStream(outputPath);
+            writeStream.write(header);
 
-        await new Promise((resolve, reject) => {
-            writeStream.on('finish', () => {
-                const authTag = cipher.getAuthTag();
-                fs.appendFileSync(outputPath, authTag);
-                resolve();
+            if (isDirectory) {
+                const archive = archiver('zip', { zlib: { level: 9 } });
+                archive.pipe(cipher).pipe(writeStream);
+                archive.directory(filePath, false);
+                await archive.finalize();
+            } else {
+                const readStream = fs.createReadStream(filePath);
+                readStream.pipe(cipher).pipe(writeStream);
+            }
+
+            await new Promise((resolve, reject) => {
+                writeStream.on('finish', () => {
+                    const authTag = cipher.getAuthTag();
+                    fs.appendFileSync(outputPath, authTag);
+                    resolve();
+                });
+                writeStream.on('error', reject);
             });
-            writeStream.on('error', reject);
-        });
+        }
 
         return { success: true, outputPath };
 
@@ -1569,30 +1703,25 @@ ipcMain.handle('decrypt-file', async (event, { filePath, algorithm, keyOption, k
         if (saveResult.canceled) return { success: false, message: '解密文件保存已取消' };
         const outputPath = saveResult.filePath;
 
-        const fileBuffer = fs.readFileSync(filePath); // Read the entire file into a buffer
+        const fileBuffer = fs.readFileSync(filePath);
         const lowerFileName = path.basename(filePath).toLowerCase();
-        let headerOffset = 0;
-        let modeFlag = null;
-        if (fileBuffer.length >= ENCRYPTION_MAGIC.length + 2 + IV_LENGTH + AUTH_TAG_LENGTH &&
-            fileBuffer.subarray(0, ENCRYPTION_MAGIC.length).equals(ENCRYPTION_MAGIC)) {
-            const version = fileBuffer[ENCRYPTION_MAGIC.length];
-            if (version !== ENCRYPTION_VERSION) {
-                throw new Error(`不支持的加密版本: ${version}`);
-            }
-            modeFlag = fileBuffer[ENCRYPTION_MAGIC.length + 1];
-            headerOffset = ENCRYPTION_MAGIC.length + 2;
-        }
-        if (fileBuffer.length < headerOffset + IV_LENGTH + AUTH_TAG_LENGTH) {
+        const parsedMeta = parseEncryptedFileMeta(fileBuffer);
+        if (fileBuffer.length < parsedMeta.headerOffset + parsedMeta.nonceLength + AUTH_TAG_LENGTH) {
             throw new Error('加密文件结构无效');
         }
-        const iv = fileBuffer.slice(headerOffset, headerOffset + IV_LENGTH);
+        const modeFlag = parsedMeta.modeFlag;
+        const nonce = fileBuffer.slice(parsedMeta.nonceOffset, parsedMeta.nonceOffset + parsedMeta.nonceLength);
         const authTag = fileBuffer.slice(fileBuffer.length - AUTH_TAG_LENGTH);
-        const encryptedDataBuffer = fileBuffer.slice(headerOffset + IV_LENGTH, fileBuffer.length - AUTH_TAG_LENGTH);
+        const encryptedDataBuffer = fileBuffer.slice(parsedMeta.headerOffset + parsedMeta.nonceLength, fileBuffer.length - AUTH_TAG_LENGTH);
         let decryptedBuffer = null;
         let lastDecryptError = null;
         for (const candidateKey of keyCandidates) {
             try {
-                decryptedBuffer = decryptAesGcmToBuffer(candidateKey, iv, authTag, encryptedDataBuffer);
+                if (parsedMeta.algorithm === ENCRYPTION_ALGORITHM_XCHACHA20) {
+                    decryptedBuffer = await decryptXChaCha20ToBuffer(candidateKey, nonce, authTag, encryptedDataBuffer);
+                } else {
+                    decryptedBuffer = decryptAesGcmToBuffer(candidateKey, nonce, authTag, encryptedDataBuffer);
+                }
                 lastDecryptError = null;
                 break;
             } catch (error) {
