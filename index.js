@@ -20,8 +20,14 @@ const ENCRYPTED_FILE_EXTENSION = '.tclock';
 const KEY_FILE_EXTENSION = '.tckey';
 const SAFEBOX_FILE_EXTENSION = '.tcsafebox';
 const SAFEBOX_MAGIC = Buffer.from('TCSB');
-const SAFEBOX_VERSION = 1;
+const SAFEBOX_VERSION_V1 = 1;
+const SAFEBOX_VERSION_V2 = 2;
+const SAFEBOX_CURRENT_VERSION = SAFEBOX_VERSION_V2;
 const SAFEBOX_SALT_LENGTH = 16;
+const SAFEBOX_BLOCK_SIZE = 4 * 1024;
+const SAFEBOX_SIZE_LENGTH = 8;
+const SAFEBOX_BLOCK_COUNT_LENGTH = 4;
+const SAFEBOX_DRIVE_LABEL = 'TransCrypt Pro Safebox';
 const DISGUISE_MAGIC = Buffer.from('TCDG');
 const DISGUISE_VERSION = 2;
 const DISGUISE_KEY_LENGTH = 32;
@@ -880,6 +886,15 @@ function deriveSafeboxKeyFromPassword(password, salt) {
     });
 }
 
+function deriveSafeboxKeyFromMaterial(keyMaterial, salt) {
+    return new Promise((resolve, reject) => {
+        crypto.scrypt(keyMaterial, salt, 32, (err, derivedKey) => {
+            if (err) reject(err);
+            resolve(derivedKey);
+        });
+    });
+}
+
 function decryptAesGcmWithKey(key, iv, authTag, encryptedDataBuffer) {
     const decipher = crypto.createDecipheriv('aes-256-gcm', key, iv, { authTagLength: AUTH_TAG_LENGTH });
     decipher.setAuthTag(authTag);
@@ -962,7 +977,7 @@ async function getDirectoryAsBuffer(dirPath) {
 }
 
 function parseSafeboxFile(fileBuffer) {
-    if (!Buffer.isBuffer(fileBuffer) || fileBuffer.length < SAFEBOX_MAGIC.length + 1 + SAFEBOX_SALT_LENGTH + IV_LENGTH + AUTH_TAG_LENGTH) {
+    if (!Buffer.isBuffer(fileBuffer) || fileBuffer.length < SAFEBOX_MAGIC.length + 1 + SAFEBOX_SALT_LENGTH) {
         throw new Error('Safebox 文件结构无效');
     }
     const magic = fileBuffer.subarray(0, SAFEBOX_MAGIC.length);
@@ -970,34 +985,132 @@ function parseSafeboxFile(fileBuffer) {
         throw new Error('不是有效的 .tcsafebox 文件');
     }
     const version = fileBuffer.readUInt8(SAFEBOX_MAGIC.length);
-    if (version !== SAFEBOX_VERSION) {
+    if (version !== SAFEBOX_VERSION_V1 && version !== SAFEBOX_VERSION_V2) {
         throw new Error(`不支持的 Safebox 版本: ${version}`);
     }
-
     const saltStart = SAFEBOX_MAGIC.length + 1;
     const ivStart = saltStart + SAFEBOX_SALT_LENGTH;
-    const encryptedStart = ivStart + IV_LENGTH;
-    const authTagStart = fileBuffer.length - AUTH_TAG_LENGTH;
-    if (authTagStart <= encryptedStart) {
-        throw new Error('Safebox 文件内容已损坏');
+    if (version === SAFEBOX_VERSION_V1) {
+        if (fileBuffer.length < SAFEBOX_MAGIC.length + 1 + SAFEBOX_SALT_LENGTH + IV_LENGTH + AUTH_TAG_LENGTH) {
+            throw new Error('Safebox 文件结构无效');
+        }
+        const encryptedStart = ivStart + IV_LENGTH;
+        const authTagStart = fileBuffer.length - AUTH_TAG_LENGTH;
+        if (authTagStart <= encryptedStart) {
+            throw new Error('Safebox 文件内容已损坏');
+        }
+        return {
+            version,
+            salt: fileBuffer.subarray(saltStart, ivStart),
+            iv: fileBuffer.subarray(ivStart, encryptedStart),
+            encryptedData: fileBuffer.subarray(encryptedStart, authTagStart),
+            authTag: fileBuffer.subarray(authTagStart)
+        };
     }
-
+    const sizeOffset = ivStart + IV_LENGTH;
+    const blockCountOffset = sizeOffset + SAFEBOX_SIZE_LENGTH;
+    const payloadStart = blockCountOffset + SAFEBOX_BLOCK_COUNT_LENGTH;
+    if (fileBuffer.length < payloadStart) {
+        throw new Error('Safebox 文件头损坏');
+    }
+    const plainSizeBig = fileBuffer.readBigUInt64LE(sizeOffset);
+    if (plainSizeBig > BigInt(Number.MAX_SAFE_INTEGER)) {
+        throw new Error('Safebox 内容过大');
+    }
+    const plainSize = Number(plainSizeBig);
+    const blockCount = fileBuffer.readUInt32LE(blockCountOffset);
+    const expectedBlockCount = plainSize === 0 ? 0 : Math.ceil(plainSize / SAFEBOX_BLOCK_SIZE);
+    if (blockCount !== expectedBlockCount) {
+        throw new Error('Safebox 块元数据无效');
+    }
+    let cursor = payloadStart;
+    const blocks = [];
+    for (let blockIndex = 0; blockIndex < blockCount; blockIndex += 1) {
+        const plainOffset = blockIndex * SAFEBOX_BLOCK_SIZE;
+        const plainLength = Math.min(SAFEBOX_BLOCK_SIZE, plainSize - plainOffset);
+        const encryptedOffset = cursor;
+        const tagOffset = encryptedOffset + plainLength;
+        const nextOffset = tagOffset + AUTH_TAG_LENGTH;
+        if (nextOffset > fileBuffer.length) {
+            throw new Error('Safebox 块数据损坏');
+        }
+        blocks.push({
+            blockIndex,
+            plainOffset,
+            plainLength,
+            encryptedOffset,
+            tagOffset,
+            encryptedData: fileBuffer.subarray(encryptedOffset, tagOffset),
+            authTag: fileBuffer.subarray(tagOffset, nextOffset)
+        });
+        cursor = nextOffset;
+    }
+    if (cursor !== fileBuffer.length) {
+        throw new Error('Safebox 文件长度与块元数据不匹配');
+    }
     return {
+        version,
         salt: fileBuffer.subarray(saltStart, ivStart),
-        iv: fileBuffer.subarray(ivStart, encryptedStart),
-        encryptedData: fileBuffer.subarray(encryptedStart, authTagStart),
-        authTag: fileBuffer.subarray(authTagStart)
+        baseIv: fileBuffer.subarray(ivStart, sizeOffset),
+        plainSize,
+        blockCount,
+        blocks
     };
 }
 
-function buildSafeboxFileBuffer({ salt, iv, encryptedData, authTag }) {
+function deriveSafeboxBlockIv(baseIv, blockIndex) {
+    if (!Buffer.isBuffer(baseIv) || baseIv.length !== IV_LENGTH) {
+        throw new Error('Safebox IV 无效');
+    }
+    const blockIv = Buffer.from(baseIv);
+    const suffix = blockIv.readUInt32BE(IV_LENGTH - 4);
+    blockIv.writeUInt32BE((suffix + blockIndex) >>> 0, IV_LENGTH - 4);
+    return blockIv;
+}
+
+function buildSafeboxFileBuffer({ salt, baseIv, plainData, derivedKey }) {
+    if (!Buffer.isBuffer(salt) || salt.length !== SAFEBOX_SALT_LENGTH) {
+        throw new Error('Safebox salt 无效');
+    }
+    if (!Buffer.isBuffer(baseIv) || baseIv.length !== IV_LENGTH) {
+        throw new Error('Safebox IV 无效');
+    }
+    if (!Buffer.isBuffer(plainData)) {
+        throw new Error('Safebox 明文内容无效');
+    }
+    if (!Buffer.isBuffer(derivedKey) || derivedKey.length !== 32) {
+        throw new Error('Safebox 密钥无效');
+    }
+    const blockCount = plainData.length === 0 ? 0 : Math.ceil(plainData.length / SAFEBOX_BLOCK_SIZE);
+    const payloadParts = [];
+    for (let blockIndex = 0; blockIndex < blockCount; blockIndex += 1) {
+        const plainOffset = blockIndex * SAFEBOX_BLOCK_SIZE;
+        const plainLength = Math.min(SAFEBOX_BLOCK_SIZE, plainData.length - plainOffset);
+        const blockData = plainData.subarray(plainOffset, plainOffset + plainLength);
+        const blockIv = deriveSafeboxBlockIv(baseIv, blockIndex);
+        const cipher = crypto.createCipheriv('aes-256-gcm', derivedKey, blockIv, { authTagLength: AUTH_TAG_LENGTH });
+        const encryptedData = Buffer.concat([cipher.update(blockData), cipher.final()]);
+        const authTag = cipher.getAuthTag();
+        payloadParts.push(encryptedData, authTag);
+    }
+    const header = Buffer.alloc(
+        SAFEBOX_MAGIC.length + 1 + SAFEBOX_SALT_LENGTH + IV_LENGTH + SAFEBOX_SIZE_LENGTH + SAFEBOX_BLOCK_COUNT_LENGTH
+    );
+    let offset = 0;
+    SAFEBOX_MAGIC.copy(header, offset);
+    offset += SAFEBOX_MAGIC.length;
+    header.writeUInt8(SAFEBOX_CURRENT_VERSION, offset);
+    offset += 1;
+    salt.copy(header, offset);
+    offset += SAFEBOX_SALT_LENGTH;
+    baseIv.copy(header, offset);
+    offset += IV_LENGTH;
+    header.writeBigUInt64LE(BigInt(plainData.length), offset);
+    offset += SAFEBOX_SIZE_LENGTH;
+    header.writeUInt32LE(blockCount, offset);
     return Buffer.concat([
-        SAFEBOX_MAGIC,
-        Buffer.from([SAFEBOX_VERSION]),
-        salt,
-        iv,
-        encryptedData,
-        authTag
+        header,
+        ...payloadParts
     ]);
 }
 
@@ -1020,7 +1133,65 @@ function mountDirectoryToDriveLetter(tempDirPath) {
         throw new Error('没有可用盘符用于挂载');
     }
     execFileSync('subst', [`${freeLetter}:`, tempDirPath], { stdio: 'ignore', windowsHide: true });
+    applyDriveLabelForLetter(freeLetter);
     return freeLetter;
+}
+
+function applyDriveLabelForLetter(driveLetter) {
+    if (!driveLetter || typeof driveLetter !== 'string') {
+        return;
+    }
+    const normalized = driveLetter.toUpperCase();
+    try {
+        execFileSync('reg', [
+            'add',
+            `HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\DriveIcons\\${normalized}\\DefaultLabel`,
+            '/ve',
+            '/t',
+            'REG_SZ',
+            '/d',
+            SAFEBOX_DRIVE_LABEL,
+            '/f'
+        ], { stdio: 'ignore', windowsHide: true });
+    } catch (error) {
+    }
+    try {
+        execFileSync('reg', [
+            'add',
+            `HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\MountPoints2\\##${normalized}#`,
+            '/v',
+            '_LabelFromReg',
+            '/t',
+            'REG_SZ',
+            '/d',
+            SAFEBOX_DRIVE_LABEL,
+            '/f'
+        ], { stdio: 'ignore', windowsHide: true });
+    } catch (error) {
+    }
+}
+
+function clearDriveLabelForLetter(driveLetter) {
+    if (!driveLetter || typeof driveLetter !== 'string') {
+        return;
+    }
+    const normalized = driveLetter.toUpperCase();
+    try {
+        execFileSync('reg', [
+            'delete',
+            `HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\DriveIcons\\${normalized}`,
+            '/f'
+        ], { stdio: 'ignore', windowsHide: true });
+    } catch (error) {
+    }
+    try {
+        execFileSync('reg', [
+            'delete',
+            `HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\MountPoints2\\##${normalized}#`,
+            '/f'
+        ], { stdio: 'ignore', windowsHide: true });
+    } catch (error) {
+    }
 }
 
 function unmountDriveLetter(driveLetter) {
@@ -1028,6 +1199,7 @@ function unmountDriveLetter(driveLetter) {
         return;
     }
     execFileSync('subst', [`${driveLetter}:`, '/D'], { stdio: 'ignore', windowsHide: true });
+    clearDriveLabelForLetter(driveLetter);
 }
 
 async function flushSafeboxSession(sessionId) {
@@ -1042,19 +1214,54 @@ async function flushSafeboxSession(sessionId) {
     }
 
     const plainZip = await getDirectoryAsBuffer(session.tempDirPath);
-    const iv = crypto.randomBytes(IV_LENGTH);
-    const cipher = crypto.createCipheriv('aes-256-gcm', session.derivedKey, iv, { authTagLength: AUTH_TAG_LENGTH });
-    const encryptedData = Buffer.concat([cipher.update(plainZip), cipher.final()]);
-    const authTag = cipher.getAuthTag();
-    const finalBuffer = buildSafeboxFileBuffer({
-        salt: session.salt,
-        iv,
-        encryptedData,
-        authTag
-    });
-    const tempOutputPath = `${session.safeboxPath}.tmp`;
-    await fsp.writeFile(tempOutputPath, finalBuffer);
-    await fsp.rename(tempOutputPath, session.safeboxPath);
+    const canPartialRewrite = session.safeboxVersion === SAFEBOX_VERSION_V2
+        && Array.isArray(session.blockEntries)
+        && session.blockEntries.length > 0
+        && Buffer.isBuffer(session.baseIv)
+        && Buffer.isBuffer(session.originalPlainZip)
+        && plainZip.length === session.originalPlainZip.length
+        && session.blockEntries.length === (plainZip.length === 0 ? 0 : Math.ceil(plainZip.length / SAFEBOX_BLOCK_SIZE));
+    if (canPartialRewrite) {
+        const changedEntries = [];
+        for (const entry of session.blockEntries) {
+            const start = entry.plainOffset;
+            const end = start + entry.plainLength;
+            const oldBlock = session.originalPlainZip.subarray(start, end);
+            const newBlock = plainZip.subarray(start, end);
+            if (!oldBlock.equals(newBlock)) {
+                changedEntries.push(entry);
+            }
+        }
+        if (changedEntries.length > 0) {
+            const fileHandle = await fsp.open(session.safeboxPath, 'r+');
+            try {
+                for (const entry of changedEntries) {
+                    const blockData = plainZip.subarray(entry.plainOffset, entry.plainOffset + entry.plainLength);
+                    const blockIv = deriveSafeboxBlockIv(session.baseIv, entry.blockIndex);
+                    const cipher = crypto.createCipheriv('aes-256-gcm', session.derivedKey, blockIv, { authTagLength: AUTH_TAG_LENGTH });
+                    const encryptedData = Buffer.concat([cipher.update(blockData), cipher.final()]);
+                    const authTag = cipher.getAuthTag();
+                    await fileHandle.write(encryptedData, 0, encryptedData.length, entry.encryptedOffset);
+                    await fileHandle.write(authTag, 0, authTag.length, entry.tagOffset);
+                }
+            } finally {
+                await fileHandle.close();
+            }
+        }
+    } else {
+        const baseIv = Buffer.isBuffer(session.baseIv) && session.baseIv.length === IV_LENGTH
+            ? session.baseIv
+            : crypto.randomBytes(IV_LENGTH);
+        const finalBuffer = buildSafeboxFileBuffer({
+            salt: session.salt,
+            baseIv,
+            plainData: plainZip,
+            derivedKey: session.derivedKey
+        });
+        const tempOutputPath = `${session.safeboxPath}.tmp`;
+        await fsp.writeFile(tempOutputPath, finalBuffer);
+        await fsp.rename(tempOutputPath, session.safeboxPath);
+    }
     await fsp.rm(session.tempDirPath, { recursive: true, force: true });
     safeboxSessions.delete(sessionId);
 }
@@ -1535,16 +1742,14 @@ ipcMain.handle('disguise-decrypt-file', async (_event, { disguisedFilePath }) =>
     }
 });
 
-ipcMain.handle('create-safebox', async (_event, { sourceDirectoryPath, password }) => {
+ipcMain.handle('create-safebox', async (_event, { sourceDirectoryPath, password, keyOption, keyFilePath }) => {
     let contentDirPath = sourceDirectoryPath || null;
     let createdTempDir = null;
     try {
         if (process.platform !== 'win32') {
             throw new Error('Safebox 功能目前仅支持 Windows');
         }
-        if (typeof password !== 'string' || password.length === 0) {
-            throw new Error('请输入 Safebox 密码');
-        }
+        const resolvedKeyOption = keyOption === 'file' ? 'file' : 'password';
         if (!contentDirPath) {
             contentDirPath = path.join(
                 os.tmpdir(),
@@ -1583,13 +1788,27 @@ ipcMain.handle('create-safebox', async (_event, { sourceDirectoryPath, password 
         }
 
         const salt = crypto.randomBytes(SAFEBOX_SALT_LENGTH);
-        const derivedKey = await deriveSafeboxKeyFromPassword(password, salt);
+        let derivedKey;
+        if (resolvedKeyOption === 'file') {
+            if (!keyFilePath || typeof keyFilePath !== 'string') {
+                throw new Error('请选择密钥文件');
+            }
+            const keyMaterial = await fsp.readFile(keyFilePath);
+            derivedKey = await deriveSafeboxKeyFromMaterial(keyMaterial, salt);
+        } else {
+            if (typeof password !== 'string' || password.length === 0) {
+                throw new Error('请输入 Safebox 密码');
+            }
+            derivedKey = await deriveSafeboxKeyFromPassword(password, salt);
+        }
         const plainZip = await getDirectoryAsBuffer(contentDirPath);
-        const iv = crypto.randomBytes(IV_LENGTH);
-        const cipher = crypto.createCipheriv('aes-256-gcm', derivedKey, iv, { authTagLength: AUTH_TAG_LENGTH });
-        const encryptedData = Buffer.concat([cipher.update(plainZip), cipher.final()]);
-        const authTag = cipher.getAuthTag();
-        const finalBuffer = buildSafeboxFileBuffer({ salt, iv, encryptedData, authTag });
+        const baseIv = crypto.randomBytes(IV_LENGTH);
+        const finalBuffer = buildSafeboxFileBuffer({
+            salt,
+            baseIv,
+            plainData: plainZip,
+            derivedKey
+        });
         await fsp.writeFile(saveResult.filePath, finalBuffer);
 
         if (createdTempDir) {
@@ -1607,7 +1826,7 @@ ipcMain.handle('create-safebox', async (_event, { sourceDirectoryPath, password 
     }
 });
 
-ipcMain.handle('mount-safebox', async (_event, { safeboxPath, password }) => {
+ipcMain.handle('mount-safebox', async (_event, { safeboxPath, password, keyOption, keyFilePath }) => {
     let tempDirPath = null;
     try {
         if (process.platform !== 'win32') {
@@ -1616,9 +1835,7 @@ ipcMain.handle('mount-safebox', async (_event, { safeboxPath, password }) => {
         if (!safeboxPath || !safeboxPath.toLowerCase().endsWith(SAFEBOX_FILE_EXTENSION)) {
             throw new Error(`请选择 ${SAFEBOX_FILE_EXTENSION} 文件`);
         }
-        if (typeof password !== 'string' || password.length === 0) {
-            throw new Error('请输入 Safebox 密码');
-        }
+        const resolvedKeyOption = keyOption === 'file' ? 'file' : 'password';
         const existing = Array.from(safeboxSessions.entries()).find(([, value]) => value.safeboxPath === safeboxPath);
         if (existing) {
             return {
@@ -1632,8 +1849,31 @@ ipcMain.handle('mount-safebox', async (_event, { safeboxPath, password }) => {
 
         const fileBuffer = await fsp.readFile(safeboxPath);
         const parsed = parseSafeboxFile(fileBuffer);
-        const derivedKey = await deriveSafeboxKeyFromPassword(password, parsed.salt);
-        const plainZip = decryptAesGcmWithKey(derivedKey, parsed.iv, parsed.authTag, parsed.encryptedData);
+        let derivedKey;
+        if (resolvedKeyOption === 'file') {
+            if (!keyFilePath || typeof keyFilePath !== 'string') {
+                throw new Error('请选择密钥文件');
+            }
+            const keyMaterial = await fsp.readFile(keyFilePath);
+            derivedKey = await deriveSafeboxKeyFromMaterial(keyMaterial, parsed.salt);
+        } else {
+            if (typeof password !== 'string' || password.length === 0) {
+                throw new Error('请输入 Safebox 密码');
+            }
+            derivedKey = await deriveSafeboxKeyFromPassword(password, parsed.salt);
+        }
+        let plainZip;
+        if (parsed.version === SAFEBOX_VERSION_V2) {
+            const decryptedBlocks = [];
+            for (const block of parsed.blocks) {
+                const blockIv = deriveSafeboxBlockIv(parsed.baseIv, block.blockIndex);
+                const plainBlock = decryptAesGcmWithKey(derivedKey, blockIv, block.authTag, block.encryptedData);
+                decryptedBlocks.push(plainBlock);
+            }
+            plainZip = Buffer.concat(decryptedBlocks, parsed.plainSize);
+        } else {
+            plainZip = decryptAesGcmWithKey(derivedKey, parsed.iv, parsed.authTag, parsed.encryptedData);
+        }
 
         tempDirPath = path.join(os.tmpdir(), 'TransCryptProSafebox', `${Date.now()}-${Math.random().toString(16).slice(2)}`);
         await fsp.mkdir(tempDirPath, { recursive: true });
@@ -1646,7 +1886,19 @@ ipcMain.handle('mount-safebox', async (_event, { safeboxPath, password }) => {
             tempDirPath,
             driveLetter,
             salt: Buffer.from(parsed.salt),
-            derivedKey
+            derivedKey,
+            safeboxVersion: parsed.version,
+            baseIv: parsed.version === SAFEBOX_VERSION_V2 ? Buffer.from(parsed.baseIv) : null,
+            blockEntries: parsed.version === SAFEBOX_VERSION_V2
+                ? parsed.blocks.map((block) => ({
+                    blockIndex: block.blockIndex,
+                    plainOffset: block.plainOffset,
+                    plainLength: block.plainLength,
+                    encryptedOffset: block.encryptedOffset,
+                    tagOffset: block.tagOffset
+                }))
+                : null,
+            originalPlainZip: parsed.version === SAFEBOX_VERSION_V2 ? Buffer.from(plainZip) : null
         });
         return {
             success: true,

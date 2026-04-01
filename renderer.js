@@ -1126,8 +1126,24 @@ document.addEventListener('DOMContentLoaded', () => {
                 </div>
 
                 <div class="form-group">
+                    <label><i class="bi bi-key"></i> 挂载解锁方式:</label>
+                    <div class="radio-group">
+                        <label><input type="radio" name="safeboxMountKeyOption" value="password" checked> 使用密码</label>
+                        <label><input type="radio" name="safeboxMountKeyOption" value="file"> 使用密钥文件</label>
+                    </div>
+                </div>
+
+                <div id="safeboxMountPasswordGroup" class="form-group">
                     <label for="safeboxMountPassword"><i class="bi bi-key"></i> 挂载密码:</label>
                     <input type="password" id="safeboxMountPassword" placeholder="输入密码解密并挂载">
+                </div>
+
+                <div id="safeboxMountKeyFileGroup" class="form-group" style="display: none;">
+                    <label for="safeboxMountKeyFilePath"><i class="bi bi-file-earmark-lock"></i> 挂载密钥文件:</label>
+                    <div class="file-input-container">
+                        <input type="text" id="safeboxMountKeyFilePath" placeholder="点击选择密钥文件" readonly>
+                        <button id="selectSafeboxMountKeyFileBtn">选择</button>
+                    </div>
                 </div>
 
                 <div class="button-group">
@@ -1140,8 +1156,24 @@ document.addEventListener('DOMContentLoaded', () => {
                 <hr style="margin: 24px 0;">
 
                 <div class="form-group">
+                    <label><i class="bi bi-shield-lock"></i> 创建容器解锁方式:</label>
+                    <div class="radio-group">
+                        <label><input type="radio" name="safeboxCreateKeyOption" value="password" checked> 使用密码</label>
+                        <label><input type="radio" name="safeboxCreateKeyOption" value="file"> 使用密钥文件</label>
+                    </div>
+                </div>
+
+                <div id="safeboxCreatePasswordGroup" class="form-group">
                     <label for="safeboxCreatePassword"><i class="bi bi-shield-lock"></i> 创建容器密码（空容器）:</label>
                     <input type="password" id="safeboxCreatePassword" placeholder="用于创建 .tcsafebox 的密码">
+                </div>
+
+                <div id="safeboxCreateKeyFileGroup" class="form-group" style="display: none;">
+                    <label for="safeboxCreateKeyFilePath"><i class="bi bi-file-earmark-lock"></i> 创建密钥文件:</label>
+                    <div class="file-input-container">
+                        <input type="text" id="safeboxCreateKeyFilePath" placeholder="点击选择密钥文件" readonly>
+                        <button id="selectSafeboxCreateKeyFileBtn">选择</button>
+                    </div>
                 </div>
 
                 <div class="button-group" style="margin-top: 0;">
@@ -1341,15 +1373,49 @@ document.addEventListener('DOMContentLoaded', () => {
         let safeboxFilePath = null;
         let mountedSessionId = null;
         let mountedDrivePath = null;
+        let mountKeyFilePath = null;
+        let createKeyFilePath = null;
 
         const createPasswordInput = document.getElementById('safeboxCreatePassword');
         const mountPasswordInput = document.getElementById('safeboxMountPassword');
+        const mountPasswordGroup = document.getElementById('safeboxMountPasswordGroup');
+        const mountKeyFileGroup = document.getElementById('safeboxMountKeyFileGroup');
+        const createPasswordGroup = document.getElementById('safeboxCreatePasswordGroup');
+        const createKeyFileGroup = document.getElementById('safeboxCreateKeyFileGroup');
+        const mountKeyFilePathInput = document.getElementById('safeboxMountKeyFilePath');
+        const createKeyFilePathInput = document.getElementById('safeboxCreateKeyFilePath');
+        const selectMountKeyFileBtn = document.getElementById('selectSafeboxMountKeyFileBtn');
+        const selectCreateKeyFileBtn = document.getElementById('selectSafeboxCreateKeyFileBtn');
+        const mountKeyOptionInputs = Array.from(document.querySelectorAll('input[name="safeboxMountKeyOption"]'));
+        const createKeyOptionInputs = Array.from(document.querySelectorAll('input[name="safeboxCreateKeyOption"]'));
         const safeboxFileDropZone = document.getElementById('safeboxFileDropZone');
         const safeboxFileSelectedName = document.getElementById('safeboxFileSelectedName');
         const sessionInfo = document.getElementById('safeboxSessionInfo');
         const createBtn = document.getElementById('startSafeboxCreate');
         const mountBtn = document.getElementById('startSafeboxMount');
         const unmountBtn = document.getElementById('startSafeboxUnmount');
+
+        const getSelectedMountKeyOption = () => {
+            const selected = mountKeyOptionInputs.find((input) => input.checked);
+            return selected ? selected.value : 'password';
+        };
+
+        const getSelectedCreateKeyOption = () => {
+            const selected = createKeyOptionInputs.find((input) => input.checked);
+            return selected ? selected.value : 'password';
+        };
+
+        const syncMountKeyOptionUI = () => {
+            const useFile = getSelectedMountKeyOption() === 'file';
+            mountPasswordGroup.style.display = useFile ? 'none' : '';
+            mountKeyFileGroup.style.display = useFile ? '' : 'none';
+        };
+
+        const syncCreateKeyOptionUI = () => {
+            const useFile = getSelectedCreateKeyOption() === 'file';
+            createPasswordGroup.style.display = useFile ? 'none' : '';
+            createKeyFileGroup.style.display = useFile ? '' : 'none';
+        };
 
         const renderSession = () => {
             if (!mountedSessionId || !mountedDrivePath) {
@@ -1424,20 +1490,57 @@ document.addEventListener('DOMContentLoaded', () => {
                 safeboxFileSelectedName.textContent = `✓ 已选择: ${result.fileName}`;
             }
         });
+        mountKeyOptionInputs.forEach((input) => {
+            input.addEventListener('change', syncMountKeyOptionUI);
+        });
+        createKeyOptionInputs.forEach((input) => {
+            input.addEventListener('change', syncCreateKeyOptionUI);
+        });
+        syncMountKeyOptionUI();
+        syncCreateKeyOptionUI();
+
+        selectMountKeyFileBtn.addEventListener('click', async () => {
+            const result = await window.electronAPI.selectPath(['openFile']);
+            if (!result.success) {
+                return;
+            }
+            mountKeyFilePath = result.filePath;
+            mountKeyFilePathInput.value = result.filePath;
+        });
+
+        selectCreateKeyFileBtn.addEventListener('click', async () => {
+            const result = await window.electronAPI.selectPath(['openFile']);
+            if (!result.success) {
+                return;
+            }
+            createKeyFilePath = result.filePath;
+            createKeyFilePathInput.value = result.filePath;
+        });
+
         bindDrop(safeboxFileDropZone, (filePath, fileName) => {
             safeboxFilePath = filePath;
             safeboxFileSelectedName.textContent = `✓ 已选择: ${fileName}`;
         });
 
         createBtn.addEventListener('click', async () => {
+            const keyOption = getSelectedCreateKeyOption();
             const password = createPasswordInput.value || '';
-            if (!password) {
-                showToast('请输入容器密码', 'error');
+            if (keyOption === 'password') {
+                if (!password) {
+                    showToast('请输入容器密码', 'error');
+                    return;
+                }
+            } else if (!createKeyFilePath) {
+                showToast('请选择创建密钥文件', 'error');
                 return;
             }
             setOperationBusy(createBtn, true, '正在生成');
             try {
-                const result = await window.electronAPI.createSafebox({ password });
+                const result = await window.electronAPI.createSafebox({
+                    password,
+                    keyOption,
+                    keyFilePath: createKeyFilePath
+                });
                 if (!result.success) {
                     showToast(`创建失败: ${result.message}`, 'error');
                     return;
@@ -1455,16 +1558,24 @@ document.addEventListener('DOMContentLoaded', () => {
                 showToast('请先选择 .tcsafebox 文件', 'error');
                 return;
             }
+            const keyOption = getSelectedMountKeyOption();
             const password = mountPasswordInput.value || '';
-            if (!password) {
-                showToast('请输入挂载密码', 'error');
+            if (keyOption === 'password') {
+                if (!password) {
+                    showToast('请输入挂载密码', 'error');
+                    return;
+                }
+            } else if (!mountKeyFilePath) {
+                showToast('请选择挂载密钥文件', 'error');
                 return;
             }
             setOperationBusy(mountBtn, true, '正在挂载');
             try {
                 const result = await window.electronAPI.mountSafebox({
                     safeboxPath: safeboxFilePath,
-                    password
+                    password,
+                    keyOption,
+                    keyFilePath: mountKeyFilePath
                 });
                 if (!result.success) {
                     showToast(`挂载失败: ${result.message}`, 'error');
