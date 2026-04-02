@@ -171,6 +171,56 @@ function showOperationResultPage({ title, subtitle = '', contentHtml = '', statu
     };
 }
 
+function ensureUnifiedRuntimeStyles() {
+    if (document.getElementById('unifiedRuntimeStyles')) {
+        return;
+    }
+    const styleEl = document.createElement('style');
+    styleEl.id = 'unifiedRuntimeStyles';
+    styleEl.textContent = `
+        .unified-group-file-list{margin-bottom:12px;display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:8px}
+        .unified-group-file-item{font-size:12px;color:var(--text-main);padding:7px 9px;word-break:break-all;border:1px solid var(--border-color);border-radius:8px;background:var(--input-bg)}
+        .unified-group-file-more{margin-top:6px;font-size:12px;color:var(--text-secondary)}
+        .unified-form-row select{width:100%;padding:12px 16px;border:1px solid var(--border-color);border-radius:var(--radius-md);font-size:14px;background-color:var(--input-bg);color:var(--text-main);cursor:pointer;appearance:none;background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' fill='%236b7280' viewBox='0 0 16 16'%3E%3Cpath d='M7.247 11.14 2.451 5.658C1.885 5.013 2.345 4 3.204 4h9.592a1 1 0 0 1 .753 1.659l-4.796 5.48a1 1 0 0 1-1.506 0z'/%3E%3C/svg%3E");background-repeat:no-repeat;background-position:right 12px center;background-size:12px;transition:all .3s cubic-bezier(.4,0,.2,1);outline:none;box-shadow:var(--shadow-sm)}
+        .unified-form-row select:hover{border-color:var(--primary-color);background-color:var(--input-hover-bg);box-shadow:var(--shadow-md)}
+        .unified-form-row select:focus{border-color:var(--primary-color);box-shadow:0 0 0 3px var(--primary-light)}
+        .unified-start-btn{width:100%;padding:14px;border:none;border-radius:12px;color:#fff;font-size:16px;font-weight:700;background:linear-gradient(135deg,#2563eb,#3b82f6 45%,#60a5fa);box-shadow:0 12px 20px -12px rgba(37,99,235,.8);cursor:pointer;transition:transform .2s ease,box-shadow .2s ease,filter .2s ease}
+        .unified-start-btn:hover{transform:translateY(-1px);box-shadow:0 18px 22px -14px rgba(37,99,235,.9);filter:brightness(1.03)}
+        .unified-start-btn:disabled{cursor:not-allowed;transform:none;box-shadow:none;filter:grayscale(.15)}
+        .unified-progress-page{max-width:1180px;margin:0 auto;border:1px solid var(--border-color);border-radius:16px;background:var(--card-bg);padding:22px;box-shadow:var(--shadow-md)}
+        .unified-progress-head{display:flex;justify-content:space-between;gap:16px;align-items:flex-start;margin-bottom:16px}
+        .unified-progress-head h1{margin-bottom:6px;font-size:30px}
+        .unified-progress-head p{margin:0;color:var(--text-secondary)}
+        .unified-progress-actions{display:flex;gap:10px;flex-wrap:wrap}
+        .unified-progress-overview{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:10px}
+        .unified-progress-bar{height:14px;margin-bottom:18px}
+        .unified-progress-content{display:grid;grid-template-columns:1fr;gap:16px}
+        .unified-progress-groups{border:1px solid var(--border-color);border-radius:12px;background:var(--surface-color);padding:12px}
+        .unified-progress-groups h3{margin:0 0 10px 0;font-size:16px}
+        .progress-group-card{border:1px solid var(--border-color);border-radius:10px;padding:10px;margin-bottom:10px;background:var(--input-bg)}
+        .progress-group-card.is-success{border-color:rgba(16,185,129,.4)}
+        .progress-group-card.is-warning{border-color:rgba(245,158,11,.55)}
+        .progress-group-head{display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;font-size:13px;font-weight:600}
+        .progress-group-meta{margin-top:6px;font-size:12px;color:var(--text-secondary);display:flex;gap:12px}
+        .progress-group-files{margin-top:8px;display:grid;grid-template-columns:repeat(auto-fill,minmax(260px,1fr));gap:8px}
+        .progress-group-file-item{display:flex;justify-content:space-between;align-items:center;gap:8px;border:1px solid var(--border-color);border-radius:9px;padding:8px 10px;background:#fff0}
+        .progress-group-file-item.status-running{border-color:rgba(59,130,246,.45)}
+        .progress-group-file-item.status-success{border-color:rgba(16,185,129,.45)}
+        .progress-group-file-item.status-failed{border-color:rgba(239,68,68,.45)}
+        .progress-group-file-item.status-pending{border-color:rgba(148,163,184,.45)}
+        .progress-group-file-name{font-size:12px;color:var(--text-main);word-break:break-all}
+        .progress-status-icon{font-size:14px}
+        .progress-status-icon.status-running{color:var(--primary-color);animation:unifiedSpin 1.1s linear infinite}
+        .progress-status-icon.status-success{color:var(--success-color)}
+        .progress-status-icon.status-failed{color:var(--error-color)}
+        .progress-status-icon.status-pending{color:var(--text-secondary)}
+        @keyframes unifiedSpin{from{transform:rotate(0)}to{transform:rotate(360deg)}}
+        @media (max-width:980px){.unified-group-file-list{grid-template-columns:1fr}.progress-group-files{grid-template-columns:1fr}}
+        @media (max-width:640px){.unified-progress-head{flex-direction:column}}
+    `;
+    document.head.appendChild(styleEl);
+}
+
 // 定义各分类的格式列表
 const formatMap = {
     'images': ['PNG', 'JPG', 'JPEG', 'GIF', 'BMP', 'WEBP', 'SVG', 'ICO'],
@@ -181,6 +231,7 @@ const formatMap = {
 
 // 获取分类的中文名称
 const categoryNameMap = {
+    'conversion': '文件转换',
     'images': '图片',
     'videos': '视频',
     'audio': '音频',
@@ -295,6 +346,48 @@ function isCompatibleWithCategory(fileName, category) {
     if (category === 'audio' && detected === 'videos') return true;
     
     return false;
+}
+
+const conversionCategoryIconMap = {
+    images: 'bi-image',
+    videos: 'bi-camera-video',
+    audio: 'bi-music-note-beamed',
+    documents: 'bi-file-earmark-text'
+};
+
+function getAvailableFormatsBySource(category, sourceExt, sourceCategory) {
+    let availableFormats = formatMap[category] || [];
+    if (category === 'documents' && sourceExt && formatCompatibilityMap[sourceExt]) {
+        availableFormats = formatCompatibilityMap[sourceExt];
+    }
+    if (category === 'audio' && sourceCategory === 'videos') {
+        availableFormats = formatMap.audio || [];
+    }
+    return supportsOriginalFormatSelection(category)
+        ? availableFormats
+        : availableFormats.filter(f => f.toLowerCase() !== sourceExt);
+}
+
+function getConversionProfilesForFile(filePath) {
+    const sourceExt = getFileExtension(filePath);
+    const detectedCategory = detectFileCategory(filePath);
+    if (!detectedCategory || !['images', 'videos', 'audio', 'documents'].includes(detectedCategory)) {
+        return [];
+    }
+
+    const categoryList = detectedCategory === 'videos'
+        ? ['videos', 'audio']
+        : [detectedCategory];
+
+    return categoryList
+        .map(category => {
+            const formats = getAvailableFormatsBySource(category, sourceExt, detectedCategory);
+            return {
+                category,
+                formats
+            };
+        })
+        .filter(item => Array.isArray(item.formats) && item.formats.length > 0);
 }
 
 // 更新文件详情预览
@@ -416,6 +509,18 @@ document.addEventListener('DOMContentLoaded', () => {
     let progressTimer = null;
     let currentProgress = 0;
     let selectedBatchFiles = [];
+    let unifiedConversionFiles = [];
+    let unifiedConversionLoading = false;
+    let unifiedProgressState = {
+        active: false,
+        total: 0,
+        completed: 0,
+        successful: 0,
+        failed: 0,
+        groups: [],
+        files: [],
+        outputDirectory: ''
+    };
     let batchState = {
         active: false,
         batchId: null,
@@ -509,21 +614,23 @@ document.addEventListener('DOMContentLoaded', () => {
             return;
         }
         const fileName = extractFileName(normalizedPath);
-        const category = detectFileCategory(fileName);
-        if (!category || !['images', 'videos', 'audio', 'documents'].includes(category)) {
-            showToast('无法识别文件格式，请在应用内手动选择分类', 'info', 4000);
+        const profiles = getConversionProfilesForFile(fileName);
+        if (profiles.length === 0) {
+            showToast('无法识别文件格式或暂无可用转换方案', 'info', 4000);
             return;
         }
-        document.body.dataset.pendingFilePath = normalizedPath;
-        document.body.dataset.pendingFileName = fileName;
+        document.body.dataset.pendingConversionFiles = JSON.stringify([{
+            filePath: normalizedPath,
+            fileName
+        }]);
         const targetButton = Array.from(sidebarButtons).find(
-            btn => btn.getAttribute('data-category') === category
+            btn => btn.getAttribute('data-category') === 'conversion'
         );
         if (!targetButton) {
             return;
         }
-        if (showSwitchToast && currentCategory !== category) {
-            showToast(`已识别为${categoryNameMap[category]}，正在跳转`, 'info', 3000);
+        if (showSwitchToast && currentCategory !== 'conversion') {
+            showToast('已识别文件类型，正在跳转到转换中心', 'info', 3000);
         }
         targetButton.click();
     }
@@ -644,6 +751,8 @@ document.addEventListener('DOMContentLoaded', () => {
             return;
         }
 
+        applyUnifiedProgressPayload(payload);
+
         if (payload.type === 'file-start') {
             batchState.currentFileName = payload.fileName || '';
             updateBatchProgressUI({
@@ -716,79 +825,12 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     });
 
-    // 欢迎页的文件输入：支持自动跳转到检测到的分类
-    const welcomeDropZone = document.getElementById('WelcomeDropZone');
-    const welcomeSelectedFileName = document.getElementById('WelcomeSelectedFileName');
-    welcomeDropZone.addEventListener('click', async () => {
-        const result = await window.electronAPI.selectFile('welcome');
-        if (result.filePath) {
-            // 检查是否需要自动切换分类
-            const switched = await handleFileSelection(result, "quickstart", sidebarButtons);
-            if (!switched) {
-                // 如果没有切换分类，直接设置文件
-                selectedFilePath = result.filePath;
-                selectedFileName.textContent = `✓ 已选择: ${result.fileName}`;
-                dropZone.classList.remove('dragover');
-            } else {
-                // 如果切换了分类，在事件处理中已设置文件
-                selectedFilePath = result.filePath;
-            }
-        } else {
-            showToast('文件选择已取消', 'info');
-        }
-    });
-
-    // 拖拽事件处理
-    welcomeDropZone.addEventListener('dragover', (e) => {
-        e.preventDefault();
-        e.stopPropagation();
-        welcomeDropZone.classList.add('dragover');
-    });
-
-    welcomeDropZone.addEventListener('dragenter', (e) => {
-        e.preventDefault();
-        e.stopPropagation();
-        welcomeDropZone.classList.add('dragover');
-    });
-
-    welcomeDropZone.addEventListener('dragleave', (e) => {
-        e.preventDefault();
-        e.stopPropagation();
-        welcomeDropZone.classList.remove('dragover');
-    });
-
-    welcomeDropZone.addEventListener('drop', async (e) => {
-        e.preventDefault();
-        e.stopPropagation();
-        welcomeDropZone.classList.remove('dragover');
-        
-        const files = e.dataTransfer.files;
-        if (files.length > 0) {
-            const file = files[0];
-            showToast('正在处理拖拽文件...', 'info', 3000);
-            
-            try {
-                // 获取文件真实路径，避免生成临时文件
-                const filePath = window.electronAPI.getFilePath(file);
-                
-                if (filePath) {
-                    const result = { filePath: filePath, fileName: file.name };
-                    
-                    // 3. 使用返回的文件路径进行后续操作
-                    welcomeSelectedFileName.textContent = `✓ 已选择: ${result.fileName}`;
-                    const switched = await handleFileSelection(result, currentCategory, sidebarButtons);
-                    if (!switched) {
-                        showToast('无法自动识别分类，请从侧边栏选择合适的分类。', 'info', 4000);
-                    }
-                } else {
-                    showToast('无法获取文件路径', 'error');
-                }
-            } catch (error) {
-                console.error('拖拽文件处理全过程错误:', error);
-                showToast(`处理拖拽文件失败: ${error.message}`, 'error', 5000);
-            }
-        }
-    });
+    const initialActiveButton = document.querySelector('.sidebar-button.active') || sidebarButtons[0];
+    if (initialActiveButton) {
+        const category = initialActiveButton.getAttribute('data-category');
+        currentCategory = category;
+        loadContent(category);
+    }
 
     function loadSettings() {
         const currentTheme = Settings.get('theme', 'auto');
@@ -2673,8 +2715,746 @@ document.addEventListener('DOMContentLoaded', () => {
         });
     }
 
+    function getSelectedProfileConfig(group) {
+        if (!group || !Array.isArray(group.profiles)) {
+            return null;
+        }
+        return group.profiles.find(profile => profile.category === group.selectedProfile) || group.profiles[0] || null;
+    }
+
+    function buildUnifiedAdvancedOptions(group, profileCategory, targetFormat) {
+        const options = {};
+        if (profileCategory === 'images') {
+            if (group.advanced.width) options.width = parseInt(group.advanced.width, 10);
+            if (group.advanced.height) options.height = parseInt(group.advanced.height, 10);
+            options.quality = parseInt(group.advanced.quality || 100, 10);
+            options.privacySanitize = !!group.advanced.privacySanitize;
+            const normalizedTarget = String(targetFormat || '').toLowerCase();
+            if (normalizedTarget === 'ico' && group.advanced.icoSize) {
+                options.icoSizes = [parseInt(group.advanced.icoSize, 10)];
+            }
+        }
+        if (profileCategory === 'videos') {
+            if (group.advanced.videoRes) options.videoRes = group.advanced.videoRes;
+            if (group.advanced.videoPreset) options.videoPreset = group.advanced.videoPreset;
+            options.privacySanitize = !!group.advanced.privacySanitize;
+        }
+        if (profileCategory === 'audio') {
+            if (group.advanced.audioBitrate) options.audioBitrate = group.advanced.audioBitrate;
+        }
+        return options;
+    }
+
+    function createUnifiedConversionGroup(sourcePath, sourceName = '') {
+        const filePath = String(sourcePath || '').trim();
+        const fileName = sourceName || extractFileName(filePath);
+        const sourceCategory = detectFileCategory(fileName);
+        const sourceExt = getFileExtension(fileName);
+        const profiles = getConversionProfilesForFile(fileName);
+        const defaultProfile = profiles[0] || null;
+        const defaultTarget = defaultProfile && defaultProfile.formats[0] ? defaultProfile.formats[0] : '';
+        return {
+            groupKey: sourceExt || '__unknown__',
+            sourceCategory,
+            sourceExt,
+            profiles,
+            selectedProfile: defaultProfile ? defaultProfile.category : null,
+            targetFormat: defaultTarget,
+            files: [{
+                filePath,
+                fileName
+            }],
+            advanced: {
+                width: '',
+                height: '',
+                quality: 100,
+                icoSize: 256,
+                videoRes: '',
+                videoPreset: 'medium',
+                audioBitrate: '',
+                privacySanitize: false
+            }
+        };
+    }
+
+    function renderUnifiedConversionCards() {
+        const statusEl = document.getElementById('unifiedConversionStatus');
+        const listEl = document.getElementById('unifiedConversionList');
+        const runBtn = document.getElementById('startUnifiedConversion');
+        if (!statusEl || !listEl || !runBtn) return;
+
+        if (unifiedConversionLoading) {
+            statusEl.innerHTML = `<span class="status-pill is-loading"><i class="bi bi-arrow-repeat"></i> 正在分析文件兼容性...</span>`;
+            listEl.innerHTML = '';
+            runBtn.disabled = true;
+            return;
+        }
+
+        if (unifiedConversionFiles.length === 0) {
+            statusEl.innerHTML = `<span class="status-pill"><i class="bi bi-lightning-charge"></i> 第一步 上传文件</span>`;
+            listEl.innerHTML = `<div class="unified-empty-hint">上传后将自动展示所有可转换格式</div>`;
+            runBtn.disabled = true;
+            return;
+        }
+
+        const totalFiles = unifiedConversionFiles.reduce((sum, group) => sum + (group.files ? group.files.length : 0), 0);
+        const unsupportedCount = unifiedConversionFiles.reduce((sum, group) => sum + (group.profiles.length === 0 ? group.files.length : 0), 0);
+        const compatibleCount = totalFiles - unsupportedCount;
+        statusEl.innerHTML = `
+            <span class="status-pill is-success"><i class="bi bi-check-circle"></i> 兼容 ${compatibleCount}</span>
+            <span class="status-pill ${unsupportedCount > 0 ? 'is-error' : ''}"><i class="bi bi-exclamation-triangle"></i> 不兼容 ${unsupportedCount}</span>
+            <span class="status-pill"><i class="bi bi-layers"></i> 格式组 ${unifiedConversionFiles.length}</span>
+            <span class="status-pill"><i class="bi bi-files"></i> 文件 ${totalFiles}</span>
+        `;
+
+        listEl.innerHTML = unifiedConversionFiles.map((group) => {
+            const selectedProfile = getSelectedProfileConfig(group);
+            const formats = selectedProfile ? selectedProfile.formats : [];
+            const currentTarget = formats.includes(group.targetFormat) ? group.targetFormat : (formats[0] || '');
+            const formatOptions = formats.map(format => `<option value="${format}" ${currentTarget === format ? 'selected' : ''}>${format}</option>`).join('');
+            const cardClassName = selectedProfile ? 'unified-file-card' : 'unified-file-card is-error';
+            const filesPreview = (group.files || []).slice(0, 6).map(file => `<div class="unified-group-file-item">${file.fileName}</div>`).join('');
+            const moreText = group.files.length > 6 ? `<div class="unified-group-file-more">... 另有 ${group.files.length - 6} 个文件</div>` : '';
+            return `
+                <div class="${cardClassName}" data-group-key="${group.groupKey}">
+                    <div class="unified-file-header">
+                        <div class="unified-file-title">
+                            <i class="bi bi-files"></i>
+                            <span>${group.sourceExt ? group.sourceExt.toUpperCase() : '未知格式'} 文件组</span>
+                        </div>
+                        <div class="unified-file-meta">${group.files.length} 个文件${selectedProfile ? ` · ${categoryNameMap[selectedProfile.category]}` : ''}</div>
+                    </div>
+                    <div class="unified-group-file-list">
+                        ${filesPreview}
+                        ${moreText}
+                    </div>
+                    ${selectedProfile ? `
+                        <div class="profile-grid">
+                            ${group.profiles.map(profile => `
+                                <button class="profile-chip ${group.selectedProfile === profile.category ? 'active' : ''}" type="button" data-action="profile" data-value="${profile.category}">
+                                    <i class="bi ${conversionCategoryIconMap[profile.category] || 'bi-arrow-repeat'}"></i>
+                                    <span>${categoryNameMap[profile.category]}</span>
+                                </button>
+                            `).join('')}
+                        </div>
+                        <div class="unified-form-row">
+                            <label>目标格式</label>
+                            <select data-action="target-format">
+                                ${supportsOriginalFormatSelection(selectedProfile.category) ? `<option value="${ORIGINAL_FORMAT_VALUE}" ${currentTarget === ORIGINAL_FORMAT_VALUE ? 'selected' : ''}>原格式 (${group.sourceExt.toUpperCase()})</option>` : ''}
+                                ${formatOptions}
+                            </select>
+                        </div>
+                        <div class="advanced-settings unified-advanced-block">
+                            <div class="advanced-header" data-action="toggle-advanced">
+                                <span><i class="bi bi-sliders"></i> 高级设置</span>
+                                <i class="bi bi-chevron-down toggle-icon"></i>
+                            </div>
+                            <div class="advanced-content">
+                                ${selectedProfile.category === 'images' ? `
+                                    <div class="settings-grid">
+                                        <div class="setting-item">
+                                            <label>分辨率</label>
+                                            <div class="input-row">
+                                                <input type="number" min="1" placeholder="宽" value="${group.advanced.width}" data-action="opt-width">
+                                                <span>×</span>
+                                                <input type="number" min="1" placeholder="高" value="${group.advanced.height}" data-action="opt-height">
+                                            </div>
+                                        </div>
+                                        <div class="setting-item">
+                                            <label>质量</label>
+                                            <div class="range-input-group">
+                                                <input type="range" min="1" max="100" value="${group.advanced.quality}" data-action="opt-quality">
+                                                <span class="range-value">${group.advanced.quality}</span>
+                                            </div>
+                                        </div>
+                                        <div class="setting-item">
+                                            <label>ICO 尺寸</label>
+                                            <select data-action="opt-ico-size">
+                                                <option value="16" ${String(group.advanced.icoSize) === '16' ? 'selected' : ''}>16×16</option>
+                                                <option value="32" ${String(group.advanced.icoSize) === '32' ? 'selected' : ''}>32×32</option>
+                                                <option value="48" ${String(group.advanced.icoSize) === '48' ? 'selected' : ''}>48×48</option>
+                                                <option value="64" ${String(group.advanced.icoSize) === '64' ? 'selected' : ''}>64×64</option>
+                                                <option value="128" ${String(group.advanced.icoSize) === '128' ? 'selected' : ''}>128×128</option>
+                                                <option value="256" ${String(group.advanced.icoSize) === '256' ? 'selected' : ''}>256×256</option>
+                                            </select>
+                                        </div>
+                                        <div class="setting-item">
+                                            <label style="display:flex;align-items:center;gap:8px;">
+                                                <input type="checkbox" data-action="opt-privacy" ${group.advanced.privacySanitize ? 'checked' : ''}>
+                                                <span>隐私脱敏</span>
+                                            </label>
+                                        </div>
+                                    </div>
+                                ` : ''}
+                                ${selectedProfile.category === 'videos' ? `
+                                    <div class="settings-grid">
+                                        <div class="setting-item">
+                                            <label>视频分辨率</label>
+                                            <select data-action="opt-video-res">
+                                                <option value="" ${group.advanced.videoRes === '' ? 'selected' : ''}>保持原样</option>
+                                                <option value="1920:1080" ${group.advanced.videoRes === '1920:1080' ? 'selected' : ''}>1080p</option>
+                                                <option value="1280:720" ${group.advanced.videoRes === '1280:720' ? 'selected' : ''}>720p</option>
+                                                <option value="854:480" ${group.advanced.videoRes === '854:480' ? 'selected' : ''}>480p</option>
+                                                <option value="640:360" ${group.advanced.videoRes === '640:360' ? 'selected' : ''}>360p</option>
+                                            </select>
+                                        </div>
+                                        <div class="setting-item">
+                                            <label>编码预设</label>
+                                            <select data-action="opt-video-preset">
+                                                <option value="medium" ${group.advanced.videoPreset === 'medium' ? 'selected' : ''}>Medium</option>
+                                                <option value="ultrafast" ${group.advanced.videoPreset === 'ultrafast' ? 'selected' : ''}>Ultrafast</option>
+                                                <option value="veryfast" ${group.advanced.videoPreset === 'veryfast' ? 'selected' : ''}>Veryfast</option>
+                                                <option value="fast" ${group.advanced.videoPreset === 'fast' ? 'selected' : ''}>Fast</option>
+                                                <option value="slow" ${group.advanced.videoPreset === 'slow' ? 'selected' : ''}>Slow</option>
+                                                <option value="veryslow" ${group.advanced.videoPreset === 'veryslow' ? 'selected' : ''}>Veryslow</option>
+                                            </select>
+                                        </div>
+                                        <div class="setting-item">
+                                            <label style="display:flex;align-items:center;gap:8px;">
+                                                <input type="checkbox" data-action="opt-privacy" ${group.advanced.privacySanitize ? 'checked' : ''}>
+                                                <span>隐私脱敏</span>
+                                            </label>
+                                        </div>
+                                    </div>
+                                ` : ''}
+                                ${selectedProfile.category === 'audio' ? `
+                                    <div class="settings-grid">
+                                        <div class="setting-item">
+                                            <label>音频码率</label>
+                                            <select data-action="opt-audio-bitrate">
+                                                <option value="" ${group.advanced.audioBitrate === '' ? 'selected' : ''}>保持原样</option>
+                                                <option value="320k" ${group.advanced.audioBitrate === '320k' ? 'selected' : ''}>320kbps</option>
+                                                <option value="256k" ${group.advanced.audioBitrate === '256k' ? 'selected' : ''}>256kbps</option>
+                                                <option value="192k" ${group.advanced.audioBitrate === '192k' ? 'selected' : ''}>192kbps</option>
+                                                <option value="128k" ${group.advanced.audioBitrate === '128k' ? 'selected' : ''}>128kbps</option>
+                                                <option value="64k" ${group.advanced.audioBitrate === '64k' ? 'selected' : ''}>64kbps</option>
+                                            </select>
+                                        </div>
+                                    </div>
+                                ` : ''}
+                            </div>
+                        </div>
+                    ` : `
+                        <div class="compatibility-error"><i class="bi bi-x-circle"></i> 当前文件暂不支持转换</div>
+                    `}
+                </div>
+            `;
+        }).join('');
+        runBtn.disabled = compatibleCount === 0;
+    }
+
+    async function appendUnifiedConversionFiles(inputItems) {
+        const normalizedItems = [];
+        const invalidNames = [];
+        for (const item of inputItems) {
+            const sourcePath = normalizeBatchFilePath(item);
+            const sourceName = typeof item === 'object' && item !== null ? (item.name || item.fileName) : extractFileName(sourcePath);
+            if (!sourcePath) {
+                invalidNames.push(sourceName || '未知文件');
+                continue;
+            }
+            normalizedItems.push({ filePath: sourcePath, fileName: sourceName || extractFileName(sourcePath) });
+        }
+        if (normalizedItems.length === 0) {
+            if (invalidNames.length > 0) {
+                showToast(`无法读取 ${invalidNames.length} 个文件路径`, 'error');
+            }
+            return;
+        }
+
+        unifiedConversionLoading = true;
+        renderUnifiedConversionCards();
+        const existing = new Set(
+            unifiedConversionFiles.flatMap(group => (group.files || []).map(file => file.filePath.toLowerCase()))
+        );
+        let addedCount = 0;
+        normalizedItems.forEach(item => {
+            const key = item.filePath.toLowerCase();
+            if (existing.has(key)) {
+                return;
+            }
+            existing.add(key);
+            const sourceExt = getFileExtension(item.fileName) || '__unknown__';
+            let targetGroup = unifiedConversionFiles.find(group => group.groupKey === sourceExt);
+            if (!targetGroup) {
+                targetGroup = createUnifiedConversionGroup(item.filePath, item.fileName);
+                unifiedConversionFiles.push(targetGroup);
+            } else {
+                targetGroup.files.push({
+                    filePath: item.filePath,
+                    fileName: item.fileName
+                });
+            }
+            addedCount += 1;
+        });
+        unifiedConversionLoading = false;
+        renderUnifiedConversionCards();
+
+        if (addedCount > 0) {
+            showToast(`已加载 ${addedCount} 个文件`, 'success', 2600);
+        }
+        if (invalidNames.length > 0) {
+            showToast(`跳过 ${invalidNames.length} 个无法处理的文件`, 'info');
+        }
+    }
+
+    function renderUnifiedProgressPage() {
+        ensureUnifiedRuntimeStyles();
+        const statusClass = unifiedProgressState.failed > 0 ? 'is-warning' : (unifiedProgressState.completed >= unifiedProgressState.total && unifiedProgressState.total > 0 ? 'is-success' : 'is-running');
+        const statusText = unifiedProgressState.completed >= unifiedProgressState.total && unifiedProgressState.total > 0
+            ? '转换完成'
+            : '正在转换';
+        mainContent.innerHTML = `
+            <div class="unified-progress-page ${statusClass}">
+                <div class="unified-progress-head">
+                    <div>
+                        <h1>批量转换进度</h1>
+                        <p>${statusText}，请勿关闭应用窗口</p>
+                    </div>
+                    <div class="unified-progress-actions">
+                        <button id="openUnifiedOutputBtn" class="secondary-btn" ${unifiedProgressState.outputDirectory ? '' : 'disabled'}><i class="bi bi-folder2-open"></i> 打开输出目录</button>
+                    </div>
+                </div>
+                <div class="unified-progress-overview">
+                    <div class="status-pill"><i class="bi bi-files"></i> 总计 ${unifiedProgressState.total}</div>
+                    <div class="status-pill is-success"><i class="bi bi-check-circle"></i> 成功 ${unifiedProgressState.successful}</div>
+                    <div class="status-pill ${unifiedProgressState.failed > 0 ? 'is-error' : ''}"><i class="bi bi-x-circle"></i> 失败 ${unifiedProgressState.failed}</div>
+                    <div class="status-pill"><i class="bi bi-hourglass-split"></i> 已完成 ${unifiedProgressState.completed}</div>
+                </div>
+                <div class="progress-bar-bg unified-progress-bar">
+                    <div class="progress-bar-fill" id="unifiedOverallProgressBar" style="width:${unifiedProgressState.total > 0 ? Math.round((unifiedProgressState.completed / unifiedProgressState.total) * 100) : 0}%"></div>
+                </div>
+                <div class="unified-progress-content">
+                    <div class="unified-progress-groups" id="unifiedProgressGroups"></div>
+                </div>
+            </div>
+        `;
+        const openBtn = document.getElementById('openUnifiedOutputBtn');
+        if (openBtn) {
+            openBtn.onclick = () => {
+                if (unifiedProgressState.outputDirectory) {
+                    window.electronAPI.openPath(unifiedProgressState.outputDirectory);
+                }
+            };
+        }
+        updateUnifiedProgressView();
+    }
+
+    function updateUnifiedProgressView() {
+        const groupsContainer = document.getElementById('unifiedProgressGroups');
+        const overallBar = document.getElementById('unifiedOverallProgressBar');
+        if (!groupsContainer) {
+            return;
+        }
+
+        if (overallBar) {
+            const percent = unifiedProgressState.total > 0 ? Math.round((unifiedProgressState.completed / unifiedProgressState.total) * 100) : 0;
+            overallBar.style.width = `${percent}%`;
+        }
+
+        groupsContainer.innerHTML = `
+            <h3>文件组进度</h3>
+            ${unifiedProgressState.groups.map(group => {
+                const percent = group.total > 0 ? Math.round((group.completed / group.total) * 100) : 0;
+                const cardState = group.failed > 0 ? 'is-warning' : (group.completed >= group.total && group.total > 0 ? 'is-success' : 'is-running');
+                return `
+                    <div class="progress-group-card ${cardState}">
+                        <div class="progress-group-head">
+                            <div>${group.title}</div>
+                            <div>${group.completed}/${group.total}</div>
+                        </div>
+                        <div class="progress-bar-bg">
+                            <div class="progress-bar-fill" style="width:${percent}%"></div>
+                        </div>
+                        <div class="progress-group-meta">
+                            <span>成功 ${group.successful}</span>
+                            <span>失败 ${group.failed}</span>
+                        </div>
+                        <div class="progress-group-files">
+                            ${(group.files || []).map(file => `
+                                <div class="progress-group-file-item status-${file.status}">
+                                    <span class="progress-group-file-name">${file.fileName}</span>
+                                    <i class="bi ${getFileProgressIcon(file.status)} progress-status-icon status-${file.status}"></i>
+                                </div>
+                            `).join('')}
+                        </div>
+                    </div>
+                `;
+            }).join('')}
+        `;
+    }
+
+    function getFileProgressIcon(status) {
+        if (status === 'running') return 'bi-arrow-repeat';
+        if (status === 'success') return 'bi-check-circle-fill';
+        if (status === 'failed') return 'bi-x-circle-fill';
+        return 'bi-hourglass-split';
+    }
+
+    function initUnifiedProgressState(tasks, outputDirectory) {
+        const groupMap = new Map();
+        tasks.forEach(task => {
+            if (!groupMap.has(task.sourceGroupKey)) {
+                groupMap.set(task.sourceGroupKey, {
+                    groupKey: task.sourceGroupKey,
+                    title: `${(task.sourceExt || '未知').toUpperCase()} 文件组`,
+                    total: 0,
+                    completed: 0,
+                    successful: 0,
+                    failed: 0,
+                    files: []
+                });
+            }
+            groupMap.get(task.sourceGroupKey).total += 1;
+        });
+        const files = tasks.map(task => ({
+            key: task.filePath.toLowerCase(),
+            filePath: task.filePath,
+            fileName: task.fileName,
+            groupKey: task.sourceGroupKey,
+            groupLabel: (task.sourceExt || '未知').toUpperCase(),
+            targetFormat: String(task.targetFormat || '').toUpperCase(),
+            status: 'pending',
+            statusText: '等待中'
+        }));
+        files.forEach(file => {
+            const group = groupMap.get(file.groupKey);
+            if (group) {
+                group.files.push(file);
+            }
+        });
+        unifiedProgressState = {
+            active: true,
+            total: files.length,
+            completed: 0,
+            successful: 0,
+            failed: 0,
+            groups: Array.from(groupMap.values()),
+            files,
+            outputDirectory: outputDirectory || ''
+        };
+        renderUnifiedProgressPage();
+    }
+
+    function applyUnifiedProgressPayload(payload) {
+        if (!unifiedProgressState.active || !payload || !payload.filePath) {
+            return;
+        }
+        const key = String(payload.filePath).toLowerCase();
+        const file = unifiedProgressState.files.find(item => item.key === key);
+        if (!file) {
+            return;
+        }
+        const group = unifiedProgressState.groups.find(item => item.groupKey === file.groupKey);
+        if (payload.type === 'file-start' && file.status === 'pending') {
+            file.status = 'running';
+            file.statusText = '转换中';
+            updateUnifiedProgressView();
+            return;
+        }
+        if (payload.type === 'file-complete' && !['success', 'failed'].includes(file.status)) {
+            const isSuccess = !!payload.success;
+            file.status = isSuccess ? 'success' : 'failed';
+            file.statusText = isSuccess ? '已完成' : '失败';
+            unifiedProgressState.completed += 1;
+            if (isSuccess) {
+                unifiedProgressState.successful += 1;
+            } else {
+                unifiedProgressState.failed += 1;
+            }
+            if (group) {
+                group.completed += 1;
+                if (isSuccess) {
+                    group.successful += 1;
+                } else {
+                    group.failed += 1;
+                }
+            }
+            updateUnifiedProgressView();
+        }
+    }
+
+    function finalizeUnifiedProgressState() {
+        unifiedProgressState.active = false;
+        renderUnifiedProgressPage();
+    }
+
+    async function runUnifiedBatchConversion(startButton) {
+        const validGroups = unifiedConversionFiles.filter(group => group.profiles.length > 0 && group.files.length > 0);
+        if (validGroups.length === 0) {
+            showToast('请先添加可转换文件', 'error');
+            return;
+        }
+
+        const tasks = validGroups.flatMap(group => {
+            const selectedProfile = getSelectedProfileConfig(group);
+            if (!selectedProfile) {
+                return [];
+            }
+            const targetFormat = group.targetFormat || selectedProfile.formats[0];
+            if (!targetFormat) {
+                return [];
+            }
+            return (group.files || []).map(file => ({
+                filePath: file.filePath,
+                fileName: file.fileName,
+                sourceGroupKey: group.groupKey,
+                sourceExt: group.sourceExt,
+                category: selectedProfile.category,
+                targetFormat,
+                options: buildUnifiedAdvancedOptions(group, selectedProfile.category, targetFormat)
+            }));
+        });
+
+        if (tasks.length === 0) {
+            showToast('请先完成目标格式选择', 'error');
+            return;
+        }
+
+        const outputResult = await window.electronAPI.selectOutputDirectory();
+        if (!outputResult.success || !outputResult.directoryPath) {
+            showToast('未选择输出目录，已取消转换', 'info');
+            return;
+        }
+
+        initUnifiedProgressState(tasks, outputResult.directoryPath);
+        setOperationBusy(startButton, true, '正在转换');
+
+        const grouped = new Map();
+        tasks.forEach(task => {
+            const key = `${task.category}|${task.targetFormat}|${JSON.stringify(task.options)}`;
+            if (!grouped.has(key)) {
+                grouped.set(key, {
+                    category: task.category,
+                    targetFormat: task.targetFormat,
+                    options: task.options,
+                    files: []
+                });
+            }
+            grouped.get(key).files.push(task);
+        });
+
+        try {
+            for (const group of grouped.values()) {
+                batchState = {
+                    active: true,
+                    batchId: `batch_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
+                    failed: [],
+                    successful: [],
+                    outputDirectory: outputResult.directoryPath,
+                    currentFileName: '',
+                    completed: 0,
+                    total: group.files.length
+                };
+                const batchResult = await window.electronAPI.batchConvertImages({
+                    batchId: batchState.batchId,
+                    files: group.files.map(file => file.filePath),
+                    targetFormat: group.targetFormat,
+                    category: group.category,
+                    options: group.options,
+                    outputDirectory: outputResult.directoryPath,
+                    concurrency: 3
+                });
+                batchState.active = false;
+
+                if (!batchResult.success && !batchResult.cancelled && batchResult.message) {
+                    group.files.forEach(file => {
+                        applyUnifiedProgressPayload({
+                            type: 'file-complete',
+                            filePath: file.filePath,
+                            success: false,
+                            message: batchResult.message
+                        });
+                    });
+                }
+
+                if (batchResult.cancelled) {
+                    break;
+                }
+            }
+        } finally {
+            setOperationBusy(startButton, false);
+            finalizeUnifiedProgressState();
+        }
+
+        if (Settings.get('openFolder', false) && outputResult.directoryPath) {
+            window.electronAPI.openPath(outputResult.directoryPath);
+        }
+
+        showToast(unifiedProgressState.failed > 0 ? '转换完成，部分文件失败' : '全部转换完成', unifiedProgressState.failed > 0 ? 'info' : 'success');
+    }
+
+    function bindUnifiedConversionEvents() {
+        const dropZone = document.getElementById('unifiedDropZone');
+        const uploadBtn = document.getElementById('selectUnifiedFilesBtn');
+        const clearBtn = document.getElementById('clearUnifiedFilesBtn');
+        const listEl = document.getElementById('unifiedConversionList');
+        const runBtn = document.getElementById('startUnifiedConversion');
+        if (!dropZone || !uploadBtn || !clearBtn || !listEl || !runBtn) {
+            return;
+        }
+
+        uploadBtn.addEventListener('click', async () => {
+            const result = await window.electronAPI.selectImageFiles();
+            if (!result.success || !Array.isArray(result.filePaths) || result.filePaths.length === 0) {
+                showToast('文件选择已取消', 'info');
+                return;
+            }
+            const files = result.filePaths.map((filePath, index) => ({
+                filePath,
+                fileName: result.fileNames[index]
+            }));
+            await appendUnifiedConversionFiles(files);
+        });
+
+        dropZone.addEventListener('click', () => {
+            uploadBtn.click();
+        });
+        ['dragover', 'dragenter'].forEach(evt => {
+            dropZone.addEventListener(evt, (event) => {
+                event.preventDefault();
+                event.stopPropagation();
+                dropZone.classList.add('dragover');
+            });
+        });
+        dropZone.addEventListener('dragleave', (event) => {
+            event.preventDefault();
+            event.stopPropagation();
+            dropZone.classList.remove('dragover');
+        });
+        dropZone.addEventListener('drop', async (event) => {
+            event.preventDefault();
+            event.stopPropagation();
+            dropZone.classList.remove('dragover');
+            const files = Array.from(event.dataTransfer.files || []);
+            if (files.length === 0) {
+                return;
+            }
+            await appendUnifiedConversionFiles(files);
+        });
+
+        clearBtn.addEventListener('click', () => {
+            unifiedConversionFiles = [];
+            renderUnifiedConversionCards();
+            showToast('已清空待转换文件', 'info');
+        });
+
+        listEl.addEventListener('click', (event) => {
+            const actionEl = event.target.closest('[data-action]');
+            if (!actionEl) return;
+            const card = event.target.closest('[data-group-key]');
+            if (!card) return;
+            const group = unifiedConversionFiles.find(item => item.groupKey === card.getAttribute('data-group-key'));
+            if (!group) return;
+            const action = actionEl.getAttribute('data-action');
+            if (action === 'profile') {
+                group.selectedProfile = actionEl.getAttribute('data-value');
+                const selectedProfile = getSelectedProfileConfig(group);
+                if (selectedProfile && !selectedProfile.formats.includes(group.targetFormat)) {
+                    group.targetFormat = selectedProfile.formats[0] || '';
+                }
+                renderUnifiedConversionCards();
+                return;
+            }
+            if (action === 'toggle-advanced') {
+                const advanced = card.querySelector('.advanced-content');
+                const icon = actionEl.querySelector('.toggle-icon');
+                if (advanced) advanced.classList.toggle('show');
+                if (icon) {
+                    icon.classList.toggle('bi-chevron-down');
+                    icon.classList.toggle('bi-chevron-up');
+                }
+            }
+        });
+
+        listEl.addEventListener('input', (event) => {
+            const action = event.target.getAttribute('data-action');
+            if (!action) return;
+            const card = event.target.closest('[data-group-key]');
+            if (!card) return;
+            const group = unifiedConversionFiles.find(item => item.groupKey === card.getAttribute('data-group-key'));
+            if (!group) return;
+            if (action === 'opt-width') group.advanced.width = event.target.value;
+            if (action === 'opt-height') group.advanced.height = event.target.value;
+            if (action === 'opt-quality') {
+                group.advanced.quality = Number(event.target.value || 100);
+                const valueEl = event.target.closest('.range-input-group')?.querySelector('.range-value');
+                if (valueEl) valueEl.textContent = String(group.advanced.quality);
+            }
+        });
+
+        listEl.addEventListener('change', (event) => {
+            const action = event.target.getAttribute('data-action');
+            if (!action) return;
+            const card = event.target.closest('[data-group-key]');
+            if (!card) return;
+            const group = unifiedConversionFiles.find(item => item.groupKey === card.getAttribute('data-group-key'));
+            if (!group) return;
+            if (action === 'target-format') group.targetFormat = event.target.value;
+            if (action === 'opt-ico-size') group.advanced.icoSize = event.target.value;
+            if (action === 'opt-video-res') group.advanced.videoRes = event.target.value;
+            if (action === 'opt-video-preset') group.advanced.videoPreset = event.target.value;
+            if (action === 'opt-audio-bitrate') group.advanced.audioBitrate = event.target.value;
+            if (action === 'opt-privacy') group.advanced.privacySanitize = !!event.target.checked;
+            if (action === 'target-format') {
+                renderUnifiedConversionCards();
+            }
+        });
+
+        runBtn.addEventListener('click', async () => {
+            await runUnifiedBatchConversion(runBtn);
+        });
+    }
+
+    function loadUnifiedConversionView() {
+        ensureUnifiedRuntimeStyles();
+        mainContent.innerHTML = `
+            <h1>文件转换</h1>
+            <p>仅需三步即可完成转换：上传文件 → 选择目标格式 → 执行转换</p>
+            <div class="operation-container unified-conversion-container">
+                <div class="conversion-steps">
+                    <span class="status-pill">1 上传文件</span>
+                    <span class="status-pill">2 选择目标格式</span>
+                    <span class="status-pill">3 执行转换</span>
+                </div>
+                <div id="unifiedDropZone" class="drop-zone unified-drop-zone">
+                    <div class="drop-zone-content">
+                        <div class="drop-zone-icon"><i class="bi bi-cloud-arrow-up"></i></div>
+                        <div class="drop-zone-text">拖拽文件到此，或点击选择文件</div>
+                        <div class="drop-zone-text">支持批量添加，系统会自动识别并给出可转换方案</div>
+                    </div>
+                </div>
+                <div class="unified-actions-row">
+                    <button id="selectUnifiedFilesBtn" class="secondary-btn"><i class="bi bi-plus-circle"></i> 添加文件</button>
+                    <button id="clearUnifiedFilesBtn" class="secondary-btn"><i class="bi bi-trash3"></i> 清空列表</button>
+                </div>
+                <div id="unifiedConversionStatus" class="unified-status-bar"></div>
+                <div id="unifiedConversionList" class="unified-file-list"></div>
+                <button id="startUnifiedConversion" class="unified-start-btn"><i class="bi bi-play-circle" style="margin-right:6px;"></i>执行转换</button>
+            </div>
+        `;
+        bindUnifiedConversionEvents();
+        renderUnifiedConversionCards();
+
+        const pendingRaw = document.body.dataset.pendingConversionFiles;
+        if (pendingRaw) {
+            try {
+                const pendingFiles = JSON.parse(pendingRaw);
+                if (Array.isArray(pendingFiles) && pendingFiles.length > 0) {
+                    appendUnifiedConversionFiles(pendingFiles);
+                }
+            } catch (error) {
+            }
+            delete document.body.dataset.pendingConversionFiles;
+        }
+    }
+
     // 加载内容到主容器
     function loadContent(category) {
+        if (category === 'conversion') {
+            loadUnifiedConversionView();
+            return;
+        }
         if (category === 'settings') {
             loadSettings();
             return;

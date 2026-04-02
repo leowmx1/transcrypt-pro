@@ -1361,3 +1361,224 @@ select:disabled {
     from { transform: translateX(-100%); }
     to { transform: translateX(100%); }
 }
+
+.unified-conversion-container {
+    max-width: 1100px;
+    margin-inline: auto;
+}
+
+.conversion-steps {
+    display: flex;
+    gap: 10px;
+    flex-wrap: wrap;
+    margin-bottom: 18px;
+}
+
+.unified-drop-zone {
+    margin-bottom: 16px;
+}
+
+.unified-actions-row {
+    display: flex;
+    gap: 12px;
+    flex-wrap: wrap;
+    margin-bottom: 14px;
+}
+
+.unified-status-bar {
+    display: flex;
+    gap: 8px;
+    flex-wrap: wrap;
+    margin-bottom: 12px;
+}
+
+.status-pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    border: 1px solid var(--border-color);
+    background-color: var(--surface-color);
+    color: var(--text-secondary);
+    border-radius: 999px;
+    font-size: 12px;
+    font-weight: 600;
+    padding: 4px 10px;
+}
+
+.status-pill.is-loading {
+    border-color: var(--primary-color);
+    color: var(--primary-color);
+}
+
+.status-pill.is-success {
+    border-color: rgba(16, 185, 129, 0.5);
+    color: var(--success-color);
+}
+
+.status-pill.is-error {
+    border-color: rgba(239, 68, 68, 0.5);
+    color: var(--error-color);
+}
+
+.unified-empty-hint {
+    border: 1px dashed var(--border-color);
+    border-radius: var(--radius-md);
+    padding: 18px;
+    color: var(--text-secondary);
+    text-align: center;
+    background-color: var(--surface-color);
+}
+
+.unified-file-list {
+    display: grid;
+    gap: 14px;
+    margin-bottom: 20px;
+}
+
+.unified-file-card {
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius-md);
+    padding: 16px;
+    background-color: var(--surface-color);
+}
+
+.unified-file-card.is-error {
+    border-color: rgba(239, 68, 68, 0.45);
+}
+
+.unified-file-header {
+    display: flex;
+    justify-content: space-between;
+    gap: 10px;
+    align-items: center;
+    margin-bottom: 10px;
+}
+
+.unified-file-title {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    font-weight: 600;
+    min-width: 0;
+}
+
+.unified-file-title span {
+    word-break: break-all;
+}
+
+.unified-file-meta {
+    font-size: 12px;
+    color: var(--text-secondary);
+}
+
+.profile-grid {
+    display: flex;
+    gap: 8px;
+    flex-wrap: wrap;
+    margin-bottom: 12px;
+}
+
+.profile-chip {
+    border: 1px solid var(--border-color);
+    border-radius: 8px;
+    background-color: var(--surface-color);
+    color: var(--text-secondary);
+    font-size: 12px;
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 7px 10px;
+    cursor: pointer;
+}
+
+.profile-chip.active {
+    border-color: var(--primary-color);
+    color: var(--primary-color);
+    background-color: var(--primary-light);
+}
+
+.unified-form-row {
+    margin-bottom: 10px;
+}
+
+.unified-form-row label {
+    display: block;
+    margin-bottom: 6px;
+    font-size: 13px;
+    color: var(--text-secondary);
+}
+
+.compatibility-error {
+    border: 1px solid rgba(239, 68, 68, 0.35);
+    border-radius: 8px;
+    padding: 10px 12px;
+    color: var(--error-color);
+    display: inline-flex;
+    gap: 8px;
+    align-items: center;
+}
+
+.unified-advanced-block {
+    margin-top: 8px;
+}
+
+@media (max-width: 980px) {
+    .container {
+        flex-direction: column;
+        height: auto;
+        min-height: 100vh;
+    }
+
+    .sidebar {
+        width: 100%;
+        padding: 16px 14px;
+        flex-direction: row;
+        flex-wrap: wrap;
+        gap: 8px;
+        align-items: center;
+    }
+
+    .sidebar h2 {
+        margin: 0 8px 0 0;
+        font-size: 18px;
+    }
+
+    .sidebar-button {
+        width: auto;
+        margin: 0;
+        padding: 10px 12px;
+    }
+
+    .sidebar-footer {
+        margin-top: 0;
+        padding-top: 0;
+        border-top: none;
+        margin-left: auto;
+    }
+
+    .main-content {
+        padding: 20px;
+    }
+
+    .operation-container {
+        padding: 20px;
+        margin-top: 20px;
+    }
+}
+
+@media (max-width: 640px) {
+    .settings-grid {
+        grid-template-columns: 1fr;
+    }
+
+    .unified-file-header {
+        flex-direction: column;
+        align-items: flex-start;
+    }
+
+    .result-actions {
+        flex-direction: column;
+        align-items: flex-start;
+        gap: 10px;
+    }
+}

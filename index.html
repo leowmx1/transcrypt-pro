@@ -13,21 +13,9 @@
     <div class="container">
         <aside class="sidebar">
             <h2>📁 格式转换</h2>
-            <button class="sidebar-button" data-category="images">
-                <i class="bi bi-image" aria-hidden="true"></i>
-                图片转换
-            </button>
-            <button class="sidebar-button" data-category="videos">
-                <i class="bi bi-camera-video" aria-hidden="true"></i>
-                视频转换
-            </button>
-            <button class="sidebar-button" data-category="audio">
-                <i class="bi bi-music-note-beamed" aria-hidden="true"></i>
-                音频转换
-            </button>
-            <button class="sidebar-button" data-category="documents">
-                <i class="bi bi-file-earmark-text" aria-hidden="true"></i>
-                文档转换
+            <button class="sidebar-button active" data-category="conversion">
+                <i class="bi bi-arrow-repeat" aria-hidden="true"></i>
+                文件转换
             </button>
 
             <h2 style="margin-top: 20px;">🔒 安全</h2>
@@ -59,26 +47,7 @@
                 </button>
             </div>
         </aside>
-        <main class="main-content">
-            <div class="logo">👏</div>
-            <h1>欢迎使用 TransCrypt Pro</h1>
-            <p>一个简洁可靠的转换工具 — 选择或拖拽文件，应用会自动跳转到合适的分类。</p>
-
-            <div class="operation-container" style="max-width:900px;margin:20px auto;">
-                <h3>快速开始</h3>
-                <div class="form-group">
-                    <label><i class="bi bi-cloud-upload"></i> 选择或拖拽文件:</label>
-                    <div id="WelcomeDropZone" class="drop-zone">
-                        <div class="drop-zone-content">
-                            <div class="drop-zone-icon"><i class="bi bi-file-arrow-down"></i></div>
-                            <div class="drop-zone-text">点击选择或拖拽文件到此</div>
-                            <span id="WelcomeSelectedFileName" class="selected-file-name"></span>
-                        </div>
-                    </div>
-                </div>
-                <div style="margin-top:12px;color:#666;font-size:13px;">或从侧边栏选择合适的分类后上传</div>
-            </div>
-        </main>
+        <main class="main-content"></main>
     </div>
     <script src="renderer.js"></script>
 </body>
