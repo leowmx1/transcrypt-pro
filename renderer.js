@@ -178,8 +178,14 @@ function ensureUnifiedRuntimeStyles() {
     const styleEl = document.createElement('style');
     styleEl.id = 'unifiedRuntimeStyles';
     styleEl.textContent = `
+        .unified-file-title{flex-wrap:wrap}
+        .unified-file-title .unified-title-text{word-break:break-all}
+        .profile-grid-inline{display:inline-flex;margin-bottom:0}
         .unified-group-file-list{margin-bottom:12px;display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:8px}
-        .unified-group-file-item{font-size:12px;color:var(--text-main);padding:7px 9px;word-break:break-all;border:1px solid var(--border-color);border-radius:8px;background:var(--input-bg)}
+        .unified-group-file-item{font-size:12px;color:var(--text-main);padding:7px 9px;border:1px solid var(--border-color);border-radius:8px;background:var(--input-bg);display:flex;align-items:center;justify-content:space-between;gap:8px}
+        .unified-group-file-name{flex:1;min-width:0;word-break:break-all}
+        .unified-group-file-remove{border:none;background:transparent;color:var(--text-secondary);padding:2px 4px;line-height:1;cursor:pointer;border-radius:6px}
+        .unified-group-file-remove:hover{color:var(--error-color);background:rgba(239,68,68,.1)}
         .unified-group-file-more{margin-top:6px;font-size:12px;color:var(--text-secondary)}
         .unified-form-row select{width:100%;padding:12px 16px;border:1px solid var(--border-color);border-radius:var(--radius-md);font-size:14px;background-color:var(--input-bg);color:var(--text-main);cursor:pointer;appearance:none;background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' fill='%236b7280' viewBox='0 0 16 16'%3E%3Cpath d='M7.247 11.14 2.451 5.658C1.885 5.013 2.345 4 3.204 4h9.592a1 1 0 0 1 .753 1.659l-4.796 5.48a1 1 0 0 1-1.506 0z'/%3E%3C/svg%3E");background-repeat:no-repeat;background-position:right 12px center;background-size:12px;transition:all .3s cubic-bezier(.4,0,.2,1);outline:none;box-shadow:var(--shadow-sm)}
         .unified-form-row select:hover{border-color:var(--primary-color);background-color:var(--input-hover-bg);box-shadow:var(--shadow-md)}
@@ -2784,6 +2790,7 @@ document.addEventListener('DOMContentLoaded', () => {
         if (!statusEl || !listEl || !runBtn) return;
 
         if (unifiedConversionLoading) {
+            statusEl.style.display = '';
             statusEl.innerHTML = `<span class="status-pill is-loading"><i class="bi bi-arrow-repeat"></i> 正在分析文件兼容性...</span>`;
             listEl.innerHTML = '';
             runBtn.disabled = true;
@@ -2791,7 +2798,8 @@ document.addEventListener('DOMContentLoaded', () => {
         }
 
         if (unifiedConversionFiles.length === 0) {
-            statusEl.innerHTML = `<span class="status-pill"><i class="bi bi-lightning-charge"></i> 第一步 上传文件</span>`;
+            statusEl.style.display = 'none';
+            statusEl.innerHTML = '';
             listEl.innerHTML = `<div class="unified-empty-hint">上传后将自动展示所有可转换格式</div>`;
             runBtn.disabled = true;
             return;
@@ -2800,6 +2808,7 @@ document.addEventListener('DOMContentLoaded', () => {
         const totalFiles = unifiedConversionFiles.reduce((sum, group) => sum + (group.files ? group.files.length : 0), 0);
         const unsupportedCount = unifiedConversionFiles.reduce((sum, group) => sum + (group.profiles.length === 0 ? group.files.length : 0), 0);
         const compatibleCount = totalFiles - unsupportedCount;
+        statusEl.style.display = '';
         statusEl.innerHTML = `
             <span class="status-pill is-success"><i class="bi bi-check-circle"></i> 兼容 ${compatibleCount}</span>
             <span class="status-pill ${unsupportedCount > 0 ? 'is-error' : ''}"><i class="bi bi-exclamation-triangle"></i> 不兼容 ${unsupportedCount}</span>
@@ -2813,30 +2822,43 @@ document.addEventListener('DOMContentLoaded', () => {
             const currentTarget = formats.includes(group.targetFormat) ? group.targetFormat : (formats[0] || '');
             const formatOptions = formats.map(format => `<option value="${format}" ${currentTarget === format ? 'selected' : ''}>${format}</option>`).join('');
             const cardClassName = selectedProfile ? 'unified-file-card' : 'unified-file-card is-error';
-            const filesPreview = (group.files || []).slice(0, 6).map(file => `<div class="unified-group-file-item">${file.fileName}</div>`).join('');
-            const moreText = group.files.length > 6 ? `<div class="unified-group-file-more">... 另有 ${group.files.length - 6} 个文件</div>` : '';
+            const filesPreview = (group.files || []).map(file => `
+                <div class="unified-group-file-item">
+                    <span class="unified-group-file-name">${file.fileName}</span>
+                    <button class="unified-group-file-remove" type="button" data-action="remove-file" data-file-key="${encodeURIComponent(String(file.filePath || '').toLowerCase())}" title="移除文件">
+                        <i class="bi bi-x-lg"></i>
+                    </button>
+                </div>
+            `).join('');
+            const isImageProfile = selectedProfile?.category === 'images';
+            const isVideoProfile = selectedProfile?.category === 'videos';
+            const isAudioProfile = selectedProfile?.category === 'audio';
+            const isDocumentProfile = selectedProfile?.category === 'documents';
+            const showAdvancedSettings = !!selectedProfile && !isDocumentProfile;
+            const showIcoSizeSetting = isImageProfile && currentTarget.toLowerCase() === 'ico';
             return `
                 <div class="${cardClassName}" data-group-key="${group.groupKey}">
                     <div class="unified-file-header">
                         <div class="unified-file-title">
                             <i class="bi bi-files"></i>
-                            <span>${group.sourceExt ? group.sourceExt.toUpperCase() : '未知格式'} 文件组</span>
+                            <span class="unified-title-text">${group.sourceExt ? group.sourceExt.toUpperCase() : '未知格式'} 文件组</span>
+                            ${selectedProfile ? `
+                                <div class="profile-grid profile-grid-inline">
+                                    ${group.profiles.map(profile => `
+                                        <button class="profile-chip ${group.selectedProfile === profile.category ? 'active' : ''}" type="button" data-action="profile" data-value="${profile.category}">
+                                            <i class="bi ${conversionCategoryIconMap[profile.category] || 'bi-arrow-repeat'}"></i>
+                                            <span>${categoryNameMap[profile.category]}</span>
+                                        </button>
+                                    `).join('')}
+                                </div>
+                            ` : ''}
                         </div>
                         <div class="unified-file-meta">${group.files.length} 个文件${selectedProfile ? ` · ${categoryNameMap[selectedProfile.category]}` : ''}</div>
                     </div>
                     <div class="unified-group-file-list">
                         ${filesPreview}
-                        ${moreText}
                     </div>
                     ${selectedProfile ? `
-                        <div class="profile-grid">
-                            ${group.profiles.map(profile => `
-                                <button class="profile-chip ${group.selectedProfile === profile.category ? 'active' : ''}" type="button" data-action="profile" data-value="${profile.category}">
-                                    <i class="bi ${conversionCategoryIconMap[profile.category] || 'bi-arrow-repeat'}"></i>
-                                    <span>${categoryNameMap[profile.category]}</span>
-                                </button>
-                            `).join('')}
-                        </div>
                         <div class="unified-form-row">
                             <label>目标格式</label>
                             <select data-action="target-format">
@@ -2844,13 +2866,14 @@ document.addEventListener('DOMContentLoaded', () => {
                                 ${formatOptions}
                             </select>
                         </div>
-                        <div class="advanced-settings unified-advanced-block">
-                            <div class="advanced-header" data-action="toggle-advanced">
-                                <span><i class="bi bi-sliders"></i> 高级设置</span>
-                                <i class="bi bi-chevron-down toggle-icon"></i>
-                            </div>
-                            <div class="advanced-content">
-                                ${selectedProfile.category === 'images' ? `
+                        ${showAdvancedSettings ? `
+                            <div class="advanced-settings unified-advanced-block">
+                                <div class="advanced-header" data-action="toggle-advanced">
+                                    <span><i class="bi bi-sliders"></i> 高级设置</span>
+                                    <i class="bi bi-chevron-down toggle-icon"></i>
+                                </div>
+                                <div class="advanced-content">
+                                    ${isImageProfile ? `
                                     <div class="settings-grid">
                                         <div class="setting-item">
                                             <label>分辨率</label>
@@ -2867,17 +2890,19 @@ document.addEventListener('DOMContentLoaded', () => {
                                                 <span class="range-value">${group.advanced.quality}</span>
                                             </div>
                                         </div>
-                                        <div class="setting-item">
-                                            <label>ICO 尺寸</label>
-                                            <select data-action="opt-ico-size">
-                                                <option value="16" ${String(group.advanced.icoSize) === '16' ? 'selected' : ''}>16×16</option>
-                                                <option value="32" ${String(group.advanced.icoSize) === '32' ? 'selected' : ''}>32×32</option>
-                                                <option value="48" ${String(group.advanced.icoSize) === '48' ? 'selected' : ''}>48×48</option>
-                                                <option value="64" ${String(group.advanced.icoSize) === '64' ? 'selected' : ''}>64×64</option>
-                                                <option value="128" ${String(group.advanced.icoSize) === '128' ? 'selected' : ''}>128×128</option>
-                                                <option value="256" ${String(group.advanced.icoSize) === '256' ? 'selected' : ''}>256×256</option>
-                                            </select>
-                                        </div>
+                                        ${showIcoSizeSetting ? `
+                                            <div class="setting-item">
+                                                <label>ICO 尺寸</label>
+                                                <select data-action="opt-ico-size">
+                                                    <option value="16" ${String(group.advanced.icoSize) === '16' ? 'selected' : ''}>16×16</option>
+                                                    <option value="32" ${String(group.advanced.icoSize) === '32' ? 'selected' : ''}>32×32</option>
+                                                    <option value="48" ${String(group.advanced.icoSize) === '48' ? 'selected' : ''}>48×48</option>
+                                                    <option value="64" ${String(group.advanced.icoSize) === '64' ? 'selected' : ''}>64×64</option>
+                                                    <option value="128" ${String(group.advanced.icoSize) === '128' ? 'selected' : ''}>128×128</option>
+                                                    <option value="256" ${String(group.advanced.icoSize) === '256' ? 'selected' : ''}>256×256</option>
+                                                </select>
+                                            </div>
+                                        ` : ''}
                                         <div class="setting-item">
                                             <label style="display:flex;align-items:center;gap:8px;">
                                                 <input type="checkbox" data-action="opt-privacy" ${group.advanced.privacySanitize ? 'checked' : ''}>
@@ -2886,7 +2911,7 @@ document.addEventListener('DOMContentLoaded', () => {
                                         </div>
                                     </div>
                                 ` : ''}
-                                ${selectedProfile.category === 'videos' ? `
+                                    ${isVideoProfile ? `
                                     <div class="settings-grid">
                                         <div class="setting-item">
                                             <label>视频分辨率</label>
@@ -2917,7 +2942,7 @@ document.addEventListener('DOMContentLoaded', () => {
                                         </div>
                                     </div>
                                 ` : ''}
-                                ${selectedProfile.category === 'audio' ? `
+                                    ${isAudioProfile ? `
                                     <div class="settings-grid">
                                         <div class="setting-item">
                                             <label>音频码率</label>
@@ -2932,8 +2957,9 @@ document.addEventListener('DOMContentLoaded', () => {
                                         </div>
                                     </div>
                                 ` : ''}
+                                </div>
                             </div>
-                        </div>
+                        ` : ''}
                     ` : `
                         <div class="compatibility-error"><i class="bi bi-x-circle"></i> 当前文件暂不支持转换</div>
                     `}
@@ -3000,18 +3026,20 @@ document.addEventListener('DOMContentLoaded', () => {
 
     function renderUnifiedProgressPage() {
         ensureUnifiedRuntimeStyles();
-        const statusClass = unifiedProgressState.failed > 0 ? 'is-warning' : (unifiedProgressState.completed >= unifiedProgressState.total && unifiedProgressState.total > 0 ? 'is-success' : 'is-running');
-        const statusText = unifiedProgressState.completed >= unifiedProgressState.total && unifiedProgressState.total > 0
+        const isCompleted = unifiedProgressState.completed >= unifiedProgressState.total && unifiedProgressState.total > 0;
+        const statusClass = unifiedProgressState.failed > 0 ? 'is-warning' : (isCompleted ? 'is-success' : 'is-running');
+        const statusText = isCompleted
             ? '转换完成'
             : '正在转换';
         mainContent.innerHTML = `
             <div class="unified-progress-page ${statusClass}">
                 <div class="unified-progress-head">
                     <div>
-                        <h1>批量转换进度</h1>
-                        <p>${statusText}，请勿关闭应用窗口</p>
+                        <h1>${isCompleted ? '批量转换成功' : '批量转换进度'}</h1>
+                        <p>${isCompleted ? '转换完成' : `${statusText}，请勿关闭应用窗口`}</p>
                     </div>
                     <div class="unified-progress-actions">
+                        ${isCompleted ? '<button id="continueUnifiedConversionBtn" class="secondary-btn"><i class="bi bi-arrow-counterclockwise"></i> 继续转换</button>' : ''}
                         <button id="openUnifiedOutputBtn" class="secondary-btn" ${unifiedProgressState.outputDirectory ? '' : 'disabled'}><i class="bi bi-folder2-open"></i> 打开输出目录</button>
                     </div>
                 </div>
@@ -3035,6 +3063,24 @@ document.addEventListener('DOMContentLoaded', () => {
                 if (unifiedProgressState.outputDirectory) {
                     window.electronAPI.openPath(unifiedProgressState.outputDirectory);
                 }
+            };
+        }
+        const continueBtn = document.getElementById('continueUnifiedConversionBtn');
+        if (continueBtn) {
+            continueBtn.onclick = () => {
+                unifiedConversionFiles = [];
+                unifiedConversionLoading = false;
+                unifiedProgressState = {
+                    active: false,
+                    total: 0,
+                    completed: 0,
+                    successful: 0,
+                    failed: 0,
+                    groups: [],
+                    files: [],
+                    outputDirectory: ''
+                };
+                loadUnifiedConversionView();
             };
         }
         updateUnifiedProgressView();
@@ -3347,6 +3393,18 @@ document.addEventListener('DOMContentLoaded', () => {
             const group = unifiedConversionFiles.find(item => item.groupKey === card.getAttribute('data-group-key'));
             if (!group) return;
             const action = actionEl.getAttribute('data-action');
+            if (action === 'remove-file') {
+                const fileKey = actionEl.getAttribute('data-file-key');
+                const fileIndex = (group.files || []).findIndex(file => encodeURIComponent(String(file.filePath || '').toLowerCase()) === fileKey);
+                if (fileIndex >= 0) {
+                    group.files.splice(fileIndex, 1);
+                }
+                if (!group.files || group.files.length === 0) {
+                    unifiedConversionFiles = unifiedConversionFiles.filter(item => item.groupKey !== group.groupKey);
+                }
+                renderUnifiedConversionCards();
+                return;
+            }
             if (action === 'profile') {
                 group.selectedProfile = actionEl.getAttribute('data-value');
                 const selectedProfile = getSelectedProfileConfig(group);
@@ -3412,11 +3470,6 @@ document.addEventListener('DOMContentLoaded', () => {
             <h1>文件转换</h1>
             <p>仅需三步即可完成转换：上传文件 → 选择目标格式 → 执行转换</p>
             <div class="operation-container unified-conversion-container">
-                <div class="conversion-steps">
-                    <span class="status-pill">1 上传文件</span>
-                    <span class="status-pill">2 选择目标格式</span>
-                    <span class="status-pill">3 执行转换</span>
-                </div>
                 <div id="unifiedDropZone" class="drop-zone unified-drop-zone">
                     <div class="drop-zone-content">
                         <div class="drop-zone-icon"><i class="bi bi-cloud-arrow-up"></i></div>
