@@ -936,7 +936,7 @@ document.addEventListener('DOMContentLoaded', () => {
                     <h3><i class="bi bi-info-circle"></i> 关于</h3>
                     <div class="about-info">
                         <div class="about-logo">🚀</div>
-                        <div class="version-tag">Version 1.3.3</div>
+                        <div class="version-tag">Version 1.3.0</div>
                         <div class="setting-label">TransCrypt Pro</div>
                         <div class="setting-description" style="margin-top:12px;">
                             一个基于 Electron 和 FFmpeg 的轻量级开源转换工具。<br>
