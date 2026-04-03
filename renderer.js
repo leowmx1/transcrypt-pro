@@ -227,6 +227,39 @@ function ensureUnifiedRuntimeStyles() {
     document.head.appendChild(styleEl);
 }
 
+function ensureHomeRuntimeStyles() {
+    if (document.getElementById('homeRuntimeStyles')) {
+        return;
+    }
+    const styleEl = document.createElement('style');
+    styleEl.id = 'homeRuntimeStyles';
+    styleEl.textContent = `
+        .home-page{max-width:1160px;margin-inline:auto;display:grid;gap:16px}
+        .home-hero{background:var(--card-bg);border:1px solid var(--border-color);border-radius:18px;padding:20px;box-shadow:var(--shadow-md)}
+        .home-hero-top{display:flex;justify-content:space-between;align-items:flex-start;gap:16px}
+        .home-title{margin:0;font-size:30px;line-height:1.2;color:var(--text-main)}
+        .home-subtitle{margin:8px 0 0 0;color:var(--text-secondary)}
+        .home-badge{display:inline-flex;align-items:center;gap:8px;padding:8px 12px;border-radius:999px;background:var(--primary-light);color:var(--primary-color);font-weight:600;font-size:13px}
+        .home-tip-strip{margin-top:14px;display:flex;align-items:center;gap:10px;border:1px solid var(--border-color);background:var(--surface-color);border-radius:12px;padding:11px 12px;min-height:48px}
+        .home-tip-emoji{font-size:20px;line-height:1;flex-shrink:0}
+        .home-tip-content{min-width:0;display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+        .home-tip-title{font-size:14px;color:var(--text-main);font-weight:700}
+        .home-tip-desc{font-size:13px;color:var(--text-secondary)}
+        .home-grid{display:grid;grid-template-columns:repeat(12,minmax(0,1fr));gap:14px}
+        .home-card{grid-column:span 4;background:var(--surface-color);border:1px solid var(--border-color);border-radius:16px;padding:16px;display:grid;gap:10px;transition:transform .2s ease,box-shadow .2s ease,border-color .2s ease}
+        .home-card:hover{transform:translateY(-2px);border-color:var(--primary-color);box-shadow:var(--shadow-md)}
+        .home-card-emoji{font-size:24px}
+        .home-card-title{font-size:16px;font-weight:700;color:var(--text-main)}
+        .home-card-desc{font-size:13px;color:var(--text-secondary)}
+        .home-feature-btn{margin-top:2px;border:none;border-radius:10px;padding:10px 12px;background:linear-gradient(135deg,#2563eb,#3b82f6 45%,#60a5fa);color:#fff;font-weight:600;cursor:pointer;display:inline-flex;align-items:center;gap:8px;transition:all .2s ease}
+        .home-feature-btn:hover{filter:brightness(1.04);transform:translateY(-1px)}
+        .home-feature-btn:active{transform:scale(.98)}
+        @media (max-width:1024px){.home-card{grid-column:span 6}}
+        @media (max-width:680px){.home-hero{padding:16px}.home-hero-top{flex-direction:column}.home-title{font-size:24px}.home-tip-content{display:block}.home-tip-desc{display:block;margin-top:3px}.home-card{grid-column:span 12}}
+    `;
+    document.head.appendChild(styleEl);
+}
+
 // 定义各分类的格式列表
 const formatMap = {
     'images': ['PNG', 'JPG', 'JPEG', 'GIF', 'BMP', 'WEBP', 'SVG', 'ICO'],
@@ -237,6 +270,7 @@ const formatMap = {
 
 // 获取分类的中文名称
 const categoryNameMap = {
+    'home': '首页',
     'conversion': '文件转换',
     'images': '图片',
     'videos': '视频',
@@ -539,6 +573,7 @@ document.addEventListener('DOMContentLoaded', () => {
     };
     let operationLockCount = 0;
     let operationLockToastTime = 0;
+    let homeCarouselTimer = null;
 
     function extractFileName(filePath) {
         if (!filePath || typeof filePath !== 'string') {
@@ -901,7 +936,7 @@ document.addEventListener('DOMContentLoaded', () => {
                     <h3><i class="bi bi-info-circle"></i> 关于</h3>
                     <div class="about-info">
                         <div class="about-logo">🚀</div>
-                        <div class="version-tag">Version 1.3.3</div>
+                        <div class="version-tag">Version 1.3.0</div>
                         <div class="setting-label">TransCrypt Pro</div>
                         <div class="setting-description" style="margin-top:12px;">
                             一个基于 Electron 和 FFmpeg 的轻量级开源转换工具。<br>
@@ -3502,8 +3537,129 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     }
 
+    function stopHomeCarousel() {
+        if (homeCarouselTimer) {
+            clearInterval(homeCarouselTimer);
+            homeCarouselTimer = null;
+        }
+    }
+
+    function loadHomeView() {
+        ensureHomeRuntimeStyles();
+        const tips = [
+            { emoji: '🚀', title: '本地离线运行', desc: '所有转换与加密均在本机完成，文件不上云、不联网、更安全。' },
+            { emoji: '💡', title: '智能识别文件', desc: '拖入任何文件自动识别类型，无需手动分类，小白也能轻松用。' },
+            { emoji: '🧩', title: '全能转换页面', desc: '图片、视频、音频、文档统一处理，一屏搞定所有格式转换。' },
+            { emoji: '🔐', title: '军用级加密保护', desc: '内置XChaCha20高速加密，支持虚拟磁盘与文件加解密。' },
+            { emoji: '🧼', title: '自动清理隐私数据', desc: '转换时自动清除图片/视频元数据，防止位置设备信息泄露。' },
+            { emoji: '⚡', title: '轻量高效不吃资源', desc: '低配电脑也流畅运行，不占内存、不卡硬盘、不发热。' },
+            { emoji: '📦', title: '批量混合转换', desc: '同时支持多类型文件批量处理，每组格式可独立设置。' },
+            { emoji: '🛡️', title: '无广告无捆绑', desc: '纯粹工具软件，界面干净简洁，专注保护你的文件安全。' },
+            
+            // 👇 下面是新增【使用方法】tips，自然友好
+            { emoji: '🖱️', title: '拖拽即可使用', desc: '无需手动选择，直接拖拽文件到软件内即可开始操作。' },
+            { emoji: '📂', title: '单文件智能推荐', desc: '选择单个文件时，自动推荐最佳格式与最优转换设置。' },
+            { emoji: '📑', title: '多文件分组管理', desc: '混合格式文件会自动分组，每组可独立配置输出格式。' },
+            { emoji: '🔑', title: '加密使用步骤', desc: '选择文件 → 设置密码 → 一键加密，安全又简单。' },
+            { emoji: '✅', title: '转换完成快速操作', desc: '任务结束后可直接打开文件或所在目录，无需手动查找。' }
+        ];
+        const featureCards = [
+            { emoji: '🚀', title: '文件转换中心', desc: '统一处理图片、视频、音频、文档转换任务。', target: 'conversion', actionText: '进入转换中心' },
+            { emoji: '🔒', title: '文件加密', desc: '快速加密敏感文件，保护本地与传输过程安全。', target: 'encryption', actionText: '进入文件加密' },
+            { emoji: '🔓', title: '文件解密', desc: '还原加密文件并校验结果，确保可用性。', target: 'decryption', actionText: '进入文件解密' },
+            { emoji: '🎭', title: '文件伪装加密', desc: '将加密内容封装为常见文件形态，便于管理。', target: 'disguise', actionText: '进入伪装加密' },
+            { emoji: '🗄️', title: '虚拟加密磁盘', desc: '创建安全容器，集中存放关键资料。', target: 'safebox', actionText: '进入虚拟磁盘' },
+            { emoji: '📊', title: '文件哈希校验', desc: '计算和比对哈希值，验证文件完整性。', target: 'hash', actionText: '进入哈希校验' },
+            { emoji: '⚙️', title: '设置中心', desc: '管理输出目录、自动打开行为与基础偏好。', target: 'settings', actionText: '进入设置中心' }
+        ];
+        let currentTipIndex = Math.floor(Math.random() * tips.length);
+        const pickNextTipIndex = () => {
+            if (tips.length <= 1) return 0;
+            let nextIndex = currentTipIndex;
+            while (nextIndex === currentTipIndex) {
+                nextIndex = Math.floor(Math.random() * tips.length);
+            }
+            return nextIndex;
+        };
+        mainContent.innerHTML = `
+            <div id="homePage" class="home-page">
+                <section class="home-hero">
+                    <div class="home-hero-top">
+                        <div>
+                            <h1 class="home-title">👏 欢迎使用 TransCrypt Pro</h1>
+                            <p class="home-subtitle">在首页直接进入关键功能，快速完成转换与安全处理任务</p>
+                        </div>
+                        <span class="home-badge">✨ 首页导航中心</span>
+                    </div>
+                    <div class="home-tip-strip">
+                        <span id="homeTipEmoji" class="home-tip-emoji">${tips[currentTipIndex].emoji}</span>
+                        <div class="home-tip-content">
+                            <span id="homeTipTitle" class="home-tip-title">${tips[currentTipIndex].title}</span>
+                            <span id="homeTipDesc" class="home-tip-desc">${tips[currentTipIndex].desc}</span>
+                        </div>
+                    </div>
+                </section>
+                <section class="home-grid">
+                    ${featureCards.map(card => `
+                        <article class="home-card">
+                            <div class="home-card-emoji">${card.emoji}</div>
+                            <div class="home-card-title">${card.title}</div>
+                            <div class="home-card-desc">${card.desc}</div>
+                            <button class="home-feature-btn" type="button" data-action="home-nav" data-target-category="${card.target}">
+                                ${card.emoji} ${card.actionText}
+                            </button>
+                        </article>
+                    `).join('')}
+                </section>
+            </div>
+        `;
+        const homePageEl = document.getElementById('homePage');
+        const tipEmojiEl = document.getElementById('homeTipEmoji');
+        const tipTitleEl = document.getElementById('homeTipTitle');
+        const tipDescEl = document.getElementById('homeTipDesc');
+        const renderTip = (index) => {
+            currentTipIndex = index;
+            const tip = tips[currentTipIndex];
+            if (!tip) return;
+            if (tipEmojiEl) tipEmojiEl.textContent = tip.emoji;
+            if (tipTitleEl) tipTitleEl.textContent = tip.title;
+            if (tipDescEl) tipDescEl.textContent = tip.desc;
+        };
+        const restartAutoPlay = () => {
+            stopHomeCarousel();
+            homeCarouselTimer = setInterval(() => {
+                renderTip(pickNextTipIndex());
+            }, 3000);
+        };
+        renderTip(currentTipIndex);
+        restartAutoPlay();
+        if (homePageEl) {
+            homePageEl.addEventListener('click', (event) => {
+                const actionEl = event.target.closest('[data-action]');
+                if (!actionEl) return;
+                const action = actionEl.getAttribute('data-action');
+                if (action === 'home-nav') {
+                    const targetCategory = actionEl.getAttribute('data-target-category');
+                    const targetButton = Array.from(sidebarButtons).find(
+                        btn => btn.getAttribute('data-category') === targetCategory
+                    );
+                    if (targetButton) {
+                        targetButton.click();
+                    }
+                }
+            });
+        }
+    }
+
     // 加载内容到主容器
     function loadContent(category) {
+        if (category !== 'home') {
+            stopHomeCarousel();
+        }
+        if (category === 'home') {
+            loadHomeView();
+            return;
+        }
         if (category === 'conversion') {
             loadUnifiedConversionView();
             return;
