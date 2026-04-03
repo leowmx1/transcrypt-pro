@@ -1076,9 +1076,9 @@ function extractZipBufferToDirectory(zipBuffer, outputPath) {
     });
 }
 
-async function getDirectoryAsBuffer(dirPath) {
+async function getDirectoryAsBuffer(dirPath, compressionLevel = 9) {
     return new Promise((resolve, reject) => {
-        const archive = archiver('zip', { zlib: { level: 9 } });
+        const archive = archiver('zip', { zlib: { level: normalizeZipCompressionLevel(compressionLevel, 9) } });
         const buffers = [];
 
         archive.on('data', (data) => buffers.push(data));
@@ -1088,6 +1088,20 @@ async function getDirectoryAsBuffer(dirPath) {
         archive.directory(dirPath, false);
         archive.finalize();
     });
+}
+
+function normalizeZipCompressionLevel(level, fallback = 5) {
+    const parsed = Number.parseInt(level, 10);
+    if (Number.isNaN(parsed)) {
+        return fallback;
+    }
+    if (parsed < 0) {
+        return 0;
+    }
+    if (parsed > 9) {
+        return 9;
+    }
+    return parsed;
 }
 
 function parseSafeboxFile(fileBuffer) {
@@ -1487,10 +1501,11 @@ function parseDisguisedContainer(fileBuffer) {
     };
 }
 
-ipcMain.handle('encrypt-file', async (event, { filePath, algorithm, keyOption, keyFilePath, password, outputOption }) => {
+ipcMain.handle('encrypt-file', async (event, { filePath, algorithm, keyOption, keyFilePath, password, outputOption, compressionLevel }) => {
     try {
         const resolvedOutputOption = outputOption || 'tclock';
         const resolvedAlgorithm = resolveEncryptionAlgorithm(algorithm);
+        const zipCompressionLevel = normalizeZipCompressionLevel(compressionLevel, 5);
         if (resolvedOutputOption === 'exe' && resolvedAlgorithm !== ENCRYPTION_ALGORITHM_AES_256_GCM) {
             throw new Error('自解密 exe 暂不支持 XChaCha20，请选择 AES-256-GCM');
         }
@@ -1568,7 +1583,7 @@ ipcMain.handle('encrypt-file', async (event, { filePath, algorithm, keyOption, k
                 const writeStream = fs.createWriteStream(tempEncryptedPath);
                 writeStream.write(header);
                 if (isDirectory) {
-                    const archive = archiver('zip', { zlib: { level: 9 } });
+                    const archive = archiver('zip', { zlib: { level: zipCompressionLevel } });
                     archive.pipe(cipher).pipe(writeStream);
                     archive.directory(filePath, false);
                     await archive.finalize();
@@ -1618,7 +1633,7 @@ ipcMain.handle('encrypt-file', async (event, { filePath, algorithm, keyOption, k
         outputPath = saveResult.filePath;
         if (resolvedAlgorithm === ENCRYPTION_ALGORITHM_XCHACHA20) {
             const plainData = isDirectory
-                ? await getDirectoryAsBuffer(filePath)
+                ? await getDirectoryAsBuffer(filePath, zipCompressionLevel)
                 : await fsp.readFile(filePath);
             const nonce = crypto.randomBytes(XCHACHA_NONCE_LENGTH);
             const encrypted = await encryptXChaCha20ToBuffer(key, nonce, plainData);
@@ -1637,7 +1652,7 @@ ipcMain.handle('encrypt-file', async (event, { filePath, algorithm, keyOption, k
             writeStream.write(header);
 
             if (isDirectory) {
-                const archive = archiver('zip', { zlib: { level: 9 } });
+                const archive = archiver('zip', { zlib: { level: zipCompressionLevel } });
                 archive.pipe(cipher).pipe(writeStream);
                 archive.directory(filePath, false);
                 await archive.finalize();
@@ -2093,6 +2108,19 @@ ipcMain.handle('get-file-info', async (event, filePath) => {
         return info;
     } catch (e) {
         return null;
+    }
+});
+
+ipcMain.handle('get-path-type', async (_event, filePath) => {
+    try {
+        const stats = await fsp.stat(filePath);
+        return {
+            success: true,
+            isDirectory: stats.isDirectory(),
+            isFile: stats.isFile()
+        };
+    } catch (error) {
+        return { success: false, isDirectory: false, isFile: false, message: error.message };
     }
 });
 

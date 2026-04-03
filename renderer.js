@@ -1001,6 +1001,23 @@ document.addEventListener('DOMContentLoaded', () => {
                     </select>
                 </div>
 
+                <div id="folderCompressionGroup" class="form-group" style="display: none;">
+                    <label for="folderCompressionLevel"><i class="bi bi-file-zip"></i> 文件夹压缩等级:</label>
+                    <select id="folderCompressionLevel">
+                        <option value="0">0 - 仅打包不压缩</option>
+                        <option value="1">1 - 最快</option>
+                        <option value="2">2</option>
+                        <option value="3">3</option>
+                        <option value="4">4</option>
+                        <option value="5" selected>5 - 默认平衡</option>
+                        <option value="6">6</option>
+                        <option value="7">7</option>
+                        <option value="8">8</option>
+                        <option value="9">9 - 最高压缩</option>
+                    </select>
+                    <div class="setting-description">仅在选择文件夹时生效，默认等级 5。</div>
+                </div>
+
                 <div class="form-group">
                     <label><i class="bi bi-file-earmark-play"></i> 输出类型:</label>
                     <div class="radio-group">
@@ -1792,7 +1809,40 @@ document.addEventListener('DOMContentLoaded', () => {
         const generateKeyGroup = document.getElementById('generateKeyGroup');
         const passwordKeyGroup = document.getElementById('passwordKeyGroup');
         const passwordKeyInput = document.getElementById('passwordKeyInput');
+        const folderCompressionGroup = document.getElementById('folderCompressionGroup');
+        const folderCompressionLevelInput = document.getElementById('folderCompressionLevel');
         let encFilePath = null;
+        let encPathType = null;
+
+        const updateFolderCompressionUI = () => {
+            if (!folderCompressionGroup) {
+                return;
+            }
+            folderCompressionGroup.style.display = encPathType === 'directory' ? 'block' : 'none';
+        };
+
+        const setEncryptionTarget = async (filePath, displayName) => {
+            if (!filePath) {
+                return;
+            }
+            encFilePath = filePath;
+            if (encSelectedFileName) {
+                encSelectedFileName.textContent = `✓ 已选择: ${displayName || extractFileName(filePath)}`;
+            }
+            encPathType = null;
+            try {
+                const typeResult = await window.electronAPI.getPathType(filePath);
+                if (typeResult && typeResult.success) {
+                    if (typeResult.isDirectory) {
+                        encPathType = 'directory';
+                    } else if (typeResult.isFile) {
+                        encPathType = 'file';
+                    }
+                }
+            } catch (error) {
+            }
+            updateFolderCompressionUI();
+        };
 
         const applyOutputOptionUI = () => {
             const outputOption = document.querySelector('input[name="outputOption"]:checked')?.value || 'tclock';
@@ -1858,8 +1908,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 return;
             }
             const pendingName = document.body.dataset.pendingEncryptionFileName || extractFileName(pendingPath);
-            encFilePath = pendingPath;
-            encSelectedFileName.textContent = `✓ 已选择: ${pendingName}`;
+            setEncryptionTarget(pendingPath, pendingName);
             delete document.body.dataset.pendingEncryptionFilePath;
             delete document.body.dataset.pendingEncryptionFileName;
         };
@@ -1867,8 +1916,7 @@ document.addEventListener('DOMContentLoaded', () => {
         encDropZone.addEventListener('click', async () => {
             const result = await window.electronAPI.selectPath(['openFile']);
             if (result.success) {
-                encFilePath = result.filePath;
-                encSelectedFileName.textContent = `✓ 已选择: ${result.fileName}`;
+                await setEncryptionTarget(result.filePath, result.fileName);
             }
         });
 
@@ -1876,8 +1924,7 @@ document.addEventListener('DOMContentLoaded', () => {
         selectFolderBtn.addEventListener('click', async () => {
             const result = await window.electronAPI.selectPath(['openDirectory']);
             if (result.success) {
-                encFilePath = result.filePath;
-                encSelectedFileName.textContent = `✓ 已选择: ${result.fileName}`;
+                await setEncryptionTarget(result.filePath, result.fileName);
             }
         });
 
@@ -1903,8 +1950,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 try {
                     const filePath = window.electronAPI.getFilePath(file);
                     if (filePath) {
-                        encFilePath = filePath;
-                        encSelectedFileName.textContent = `✓ 已选择: ${file.name}`;
+                        await setEncryptionTarget(filePath, file.name);
                     } else {
                         showToast('无法获取文件路径', 'error');
                     }
@@ -1938,6 +1984,7 @@ document.addEventListener('DOMContentLoaded', () => {
             const keyOption = document.querySelector('input[name="keyOption"]:checked').value;
             const keyFilePath = keyFilePathInput.value;
             const password = passwordKeyInput ? passwordKeyInput.value : '';
+            const compressionLevel = Number.parseInt(folderCompressionLevelInput?.value || '5', 10);
             if (outputOption === 'exe' && keyOption !== 'password') {
                 showToast('自解密 exe 模式仅支持密码', 'error');
                 return;
@@ -1964,7 +2011,8 @@ document.addEventListener('DOMContentLoaded', () => {
                     keyOption, 
                     keyFilePath,
                     password,
-                    outputOption
+                    outputOption,
+                    compressionLevel: Number.isNaN(compressionLevel) ? 5 : compressionLevel
                 });
                 if (result.success) {
                     showToast(`加密成功！文件保存在: ${result.outputPath}`, 'success');
