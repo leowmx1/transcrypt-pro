@@ -3838,18 +3838,20 @@ document.addEventListener('DOMContentLoaded', () => {
             return el ? String(el.value || '').trim() : '';
         };
         const stripEl = document.getElementById('pro_stripMetadata');
+        const hwAccel = read('hwAccel').toLowerCase();
+        const qsvMode = hwAccel === 'qsv';
         return {
             container: read('container'),
-            hwAccel: read('hwAccel'),
-            videoCodec: read('videoCodec'),
+            hwAccel,
+            videoCodec: qsvMode ? 'h264_qsv' : read('videoCodec'),
             videoBitrate: read('videoBitrate'),
-            resolution: read('resolution'),
+            resolution: qsvMode ? '' : read('resolution'),
             fps: read('fps'),
-            crf: read('crf'),
+            crf: qsvMode ? '' : read('crf'),
             preset: read('preset'),
             profile: read('profile'),
             gop: read('gop'),
-            pixelFormat: read('pixelFormat'),
+            pixelFormat: qsvMode ? 'nv12' : read('pixelFormat'),
             audioCodec: read('audioCodec'),
             sampleRate: read('sampleRate'),
             channels: read('channels'),
@@ -4094,7 +4096,7 @@ document.addEventListener('DOMContentLoaded', () => {
         const audioOnlyContainers = new Set(['mp3', 'aac', 'm4a', 'wav', 'flac', 'ogg', 'wma']);
         const webmVideoCodecs = new Set(['libvpx', 'libvpx-vp9', 'libaom-av1', 'none', 'copy']);
         const webmAudioCodecs = new Set(['libopus', 'libvorbis', 'none', 'copy']);
-        const qsvVideoCodecs = new Set(['h264_qsv', 'hevc_qsv', 'none']);
+        const qsvVideoCodecs = new Set(['h264_qsv', 'none']);
         const softVideoCodecs = new Set(['libx264', 'libx265', 'libvpx-vp9', 'none', 'copy']);
         const opusRates = new Set(['8000', '12000', '16000', '24000', '48000']);
         const commonRates = new Set(['8000', '10000', '11025', '12000', '16000', '22050', '24000', '32000', '44100', '48000', '96000']);
@@ -4111,6 +4113,7 @@ document.addEventListener('DOMContentLoaded', () => {
             const pixelFormatEl = document.getElementById('pro_pixelFormat');
             const crfGroupEl = document.getElementById('pro_crf_group');
             const crfEl = document.getElementById('pro_crf');
+            const resolutionEl = document.getElementById('pro_resolution');
             if (!containerEl || !hwEl || !videoCodecEl || !audioCodecEl || !sampleRateEl || !pixelFormatEl || !crfEl) {
                 return;
             }
@@ -4148,13 +4151,18 @@ document.addEventListener('DOMContentLoaded', () => {
             const currentAudioCodec = String(audioCodecEl.value || '');
             const videoDisabled = !hasVideo || currentVideoCodec === 'none';
             const audioDisabled = !hasAudio || currentAudioCodec === 'none';
+            const qsvVideoMode = hw === 'qsv' && !videoDisabled;
 
-            if (hw === 'qsv' && !videoDisabled) {
+            if (qsvVideoMode) {
+                videoCodecEl.value = 'h264_qsv';
                 setSelectAllowedValues(pixelFormatEl, new Set(['nv12']), false);
                 pixelFormatEl.value = 'nv12';
                 crfEl.value = '';
                 crfEl.disabled = true;
                 if (crfGroupEl) crfGroupEl.classList.add('pro-hidden');
+                if (resolutionEl) {
+                    resolutionEl.value = '';
+                }
             } else {
                 setSelectAllowedValues(pixelFormatEl, new Set(['', 'yuv420p', 'nv12', 'yuv422p', 'yuv444p']), true);
                 crfEl.disabled = videoDisabled;
@@ -4167,7 +4175,8 @@ document.addEventListener('DOMContentLoaded', () => {
             }
             setSelectAllowedValues(sampleRateEl, allowedSampleRates, true);
 
-            setControlsDisabled(['pro_videoBitrate', 'pro_resolution', 'pro_fps', 'pro_crf', 'pro_preset', 'pro_profile', 'pro_gop', 'pro_pixelFormat'], videoDisabled);
+            setControlsDisabled(['pro_videoBitrate', 'pro_fps', 'pro_crf', 'pro_preset', 'pro_profile', 'pro_gop', 'pro_pixelFormat'], videoDisabled);
+            setControlsDisabled(['pro_resolution'], videoDisabled || qsvVideoMode);
             setControlsDisabled(['pro_sampleRate', 'pro_channels', 'pro_audioBitrate'], audioDisabled);
         };
         proControlPolicyUpdater = enforceProControlPolicy;
@@ -4233,10 +4242,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 const videoCodecEl = document.getElementById('pro_videoCodec');
                 const pixelFormatEl = document.getElementById('pro_pixelFormat');
                 if (hwEl) hwEl.value = 'qsv';
-                if (videoCodecEl) {
-                    const srcCodec = String((probeResult.probe.streams.video && probeResult.probe.streams.video.codec) || '').toLowerCase();
-                    videoCodecEl.value = srcCodec.includes('265') || srcCodec.includes('hevc') ? 'hevc_qsv' : 'h264_qsv';
-                }
+                if (videoCodecEl) videoCodecEl.value = 'h264_qsv';
                 if (pixelFormatEl) pixelFormatEl.value = 'nv12';
             }
             enforceProControlPolicy();

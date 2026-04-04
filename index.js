@@ -2202,7 +2202,6 @@ function buildProfessionalConversionArgs({
     const container = String(cfg.container || '').toLowerCase();
     const isAudioContainer = ['mp3', 'aac', 'm4a', 'wav', 'flac', 'ogg', 'wma'].includes(container);
     const isWebmContainer = container === 'webm';
-    const qsvVideoCodecs = new Set(['h264_qsv', 'hevc_qsv']);
     const webmVideoCodecs = new Set(['libvpx', 'libvpx-vp9', 'libaom-av1']);
     const webmAudioCodecs = new Set(['libopus', 'libvorbis']);
     const opusSampleRates = new Set(['8000', '12000', '16000', '24000', '48000']);
@@ -2211,6 +2210,10 @@ function buildProfessionalConversionArgs({
     const hwAccel = String(cfg.hwAccel || '').toLowerCase();
     const pixelFormat = String(cfg.pixelFormat || '').toLowerCase();
     const sampleRate = String(cfg.sampleRate || '').trim();
+    const hasVideoOutput = hasVideo && !isAudioContainer && videoCodec !== 'none';
+    const isQsvMode = hwAccel === 'qsv' && hasVideoOutput;
+    const effectiveVideoCodec = isQsvMode ? 'h264_qsv' : videoCodec;
+    const effectivePixelFormat = isQsvMode ? 'nv12' : pixelFormat;
 
     if (videoCodec === 'copy' && (cfg.videoBitrate || cfg.crf || cfg.preset || cfg.profile || cfg.gop || cfg.pixelFormat || cfg.fps || cfg.resolution)) {
         errors.push('视频编码器为 copy 时，不能同时设置码率、CRF、预设、Profile、GOP、像素格式、帧率或分辨率');
@@ -2221,14 +2224,17 @@ function buildProfessionalConversionArgs({
     if (isAudioContainer && videoCodec && videoCodec !== 'none') {
         errors.push('目标容器为音频格式时，视频流必须设置为 none');
     }
-    if (hwAccel === 'qsv' && videoCodec && videoCodec !== 'none' && !qsvVideoCodecs.has(videoCodec)) {
-        errors.push('QSV 硬件加速模式下，视频编码器仅允许 h264_qsv 或 hevc_qsv');
+    if (isQsvMode && videoCodec && videoCodec !== 'none' && videoCodec !== 'h264_qsv') {
+        warnings.push('QSV 模式将强制使用 h264_qsv 编码器');
     }
-    if (hwAccel === 'qsv' && cfg.crf !== '' && cfg.crf !== undefined && cfg.crf !== null) {
-        errors.push('QSV 硬件加速模式下不支持 CRF 参数');
+    if (isQsvMode && cfg.crf !== '' && cfg.crf !== undefined && cfg.crf !== null) {
+        warnings.push('QSV 模式下 CRF 已自动禁用');
     }
-    if (hwAccel === 'qsv' && pixelFormat && pixelFormat !== 'nv12') {
-        errors.push('QSV 硬件加速模式下像素格式仅支持 nv12');
+    if (isQsvMode && pixelFormat && pixelFormat !== 'nv12') {
+        warnings.push('QSV 模式将强制使用 nv12 像素格式');
+    }
+    if (cfg.resolution) {
+        warnings.push('已禁用自动 scale 滤镜，分辨率参数将被忽略');
     }
     if (isWebmContainer && videoCodec && videoCodec !== 'none' && videoCodec !== 'copy' && !webmVideoCodecs.has(videoCodec)) {
         errors.push('WebM 容器仅支持 VP8/VP9/AV1 视频编码器');
@@ -2248,7 +2254,7 @@ function buildProfessionalConversionArgs({
     if (!hasAudio && audioCodec && audioCodec !== 'none') {
         warnings.push('源文件不包含音频流，音频参数将被忽略');
     }
-    if (cfg.crf && cfg.videoBitrate) {
+    if (!isQsvMode && cfg.crf && cfg.videoBitrate) {
         warnings.push('同时设置 CRF 与视频码率时，编码器行为可能与预期不一致');
     }
 
@@ -2260,11 +2266,10 @@ function buildProfessionalConversionArgs({
     if (resumeFromMs > 0) {
         args.push('-ss', (resumeFromMs / 1000).toFixed(3));
     }
-    if (hwAccel && videoCodec && videoCodec !== 'copy' && videoCodec !== 'none') {
+    if (isQsvMode) {
+        args.push('-hwaccel', 'qsv', '-hwaccel_output_format', 'qsv');
+    } else if (hwAccel && hasVideoOutput && effectiveVideoCodec !== 'copy' && effectiveVideoCodec !== 'none') {
         args.push('-hwaccel', hwAccel);
-        if (hwAccel === 'qsv') {
-            args.push('-hwaccel_output_format', 'qsv');
-        }
     }
     args.push('-i', sourcePath);
 
@@ -2273,26 +2278,20 @@ function buildProfessionalConversionArgs({
     }
 
     if (hasVideo && !isAudioContainer) {
-        if (videoCodec === 'none') {
+        if (effectiveVideoCodec === 'none') {
             args.push('-vn');
-        } else if (videoCodec === 'copy') {
+        } else if (effectiveVideoCodec === 'copy') {
             args.push('-c:v', 'copy');
-        } else if (videoCodec) {
-            args.push('-c:v', videoCodec);
+        } else if (effectiveVideoCodec) {
+            args.push('-c:v', effectiveVideoCodec);
         }
         if (cfg.videoBitrate) args.push('-b:v', String(cfg.videoBitrate));
         if (cfg.fps) args.push('-r', String(cfg.fps));
-        if (hwAccel !== 'qsv' && cfg.crf !== '' && cfg.crf !== undefined && cfg.crf !== null) args.push('-crf', String(cfg.crf));
+        if (!isQsvMode && cfg.crf !== '' && cfg.crf !== undefined && cfg.crf !== null) args.push('-crf', String(cfg.crf));
         if (cfg.preset) args.push('-preset', String(cfg.preset));
         if (cfg.profile) args.push('-profile:v', String(cfg.profile));
         if (cfg.gop) args.push('-g', String(cfg.gop));
-        if (cfg.pixelFormat) args.push('-pix_fmt', String(cfg.pixelFormat));
-        if (cfg.resolution) {
-            const [w, h] = String(cfg.resolution).toLowerCase().split('x');
-            if (toNumber(w, 0) > 0 && toNumber(h, 0) > 0) {
-                args.push('-vf', `scale=${w}:${h}`);
-            }
-        }
+        if (effectivePixelFormat) args.push('-pix_fmt', String(effectivePixelFormat));
     } else {
         args.push('-vn');
     }
