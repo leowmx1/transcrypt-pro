@@ -298,7 +298,8 @@ body.operation-sidebar-locked .sidebar-button i.bi {
     box-shadow: var(--shadow-md);
 }
 
-#startConversion {
+#startConversion,
+#proStartBtn {
     width: 100%;
     padding: 14px;
     background-color: var(--primary-color);
@@ -313,13 +314,15 @@ body.operation-sidebar-locked .sidebar-button i.bi {
     box-shadow: var(--shadow-sm);
 }
 
-#startConversion:hover {
+#startConversion:hover,
+#proStartBtn:hover {
     background-color: var(--primary-hover);
     transform: translateY(-1px);
     box-shadow: var(--shadow-md);
 }
 
-#startConversion:disabled {
+#startConversion:disabled,
+#proStartBtn:disabled {
     background-color: #9ca3af;
     cursor: not-allowed;
     transform: none;

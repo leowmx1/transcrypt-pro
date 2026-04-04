@@ -271,7 +271,8 @@ const formatMap = {
 // 获取分类的中文名称
 const categoryNameMap = {
     'home': '首页',
-    'conversion': '文件转换',
+    'conversion': '万能转换',
+    'pro-conversion': '专业转换',
     'images': '图片',
     'videos': '视频',
     'audio': '音频',
@@ -574,6 +575,26 @@ document.addEventListener('DOMContentLoaded', () => {
     let operationLockCount = 0;
     let operationLockToastTime = 0;
     let homeCarouselTimer = null;
+    let proConversionState = {
+        sourcePath: '',
+        sourceProbe: null,
+        originalConfig: null,
+        currentConfig: null,
+        outputPath: '',
+        taskId: '',
+        running: false,
+        paused: false,
+        status: 'idle',
+        logs: [],
+        command: '',
+        lastProgress: null,
+        percent: 0,
+        speed: '',
+        remainingSec: null,
+        elapsedSec: 0,
+        errorMessage: ''
+    };
+    let proControlPolicyUpdater = null;
 
     function extractFileName(filePath) {
         if (!filePath || typeof filePath !== 'string') {
@@ -832,6 +853,73 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     });
 
+    window.electronAPI.onProConversionEvent((payload) => {
+        if (!payload || !proConversionState.taskId || payload.taskId !== proConversionState.taskId) {
+            return;
+        }
+        if (payload.type === 'log' && payload.line) {
+            proConversionState.logs.push(payload.line);
+            if (proConversionState.logs.length > 500) {
+                proConversionState.logs = proConversionState.logs.slice(-500);
+            }
+            updateProProcessLiveUI();
+            return;
+        }
+        if (payload.type === 'progress') {
+            proConversionState.lastProgress = payload;
+            proConversionState.percent = Number(payload.percent || 0);
+            proConversionState.speed = payload.speed || '';
+            proConversionState.remainingSec = payload.remainingSec === null ? null : Number(payload.remainingSec || 0);
+            proConversionState.elapsedSec = Number(payload.elapsedSec || 0);
+            proConversionState.status = proConversionState.paused ? 'paused' : 'running';
+            updateProProcessLiveUI();
+            return;
+        }
+        if (payload.type === 'state') {
+            if (payload.state === 'running') {
+                proConversionState.running = true;
+                proConversionState.paused = false;
+                proConversionState.status = 'running';
+            }
+            if (payload.state === 'paused') {
+                proConversionState.paused = true;
+                proConversionState.status = 'paused';
+            }
+            if (payload.state === 'cancelled') {
+                proConversionState.running = false;
+                proConversionState.paused = false;
+                proConversionState.status = 'cancelled';
+                if (document.getElementById('proProcessPage')) {
+                    renderProProcessPage();
+                }
+            }
+            return;
+        }
+        if (payload.type === 'success') {
+            proConversionState.running = false;
+            proConversionState.paused = false;
+            proConversionState.status = 'success';
+            proConversionState.percent = 100;
+            proConversionState.remainingSec = 0;
+            proConversionState.outputPath = payload.outputPath || proConversionState.outputPath;
+            showToast('专业转换完成', 'success', 4000);
+            if (document.getElementById('proProcessPage')) {
+                renderProProcessPage();
+            }
+            return;
+        }
+        if (payload.type === 'error') {
+            proConversionState.running = false;
+            proConversionState.paused = false;
+            proConversionState.status = 'error';
+            proConversionState.errorMessage = payload.message || '专业转换失败';
+            if (document.getElementById('proProcessPage')) {
+                renderProProcessPage();
+            }
+            showToast(payload.message || '专业转换失败', 'error', 5000);
+        }
+    });
+
 
 
     // 侧边栏按钮点击事件
@@ -936,7 +1024,7 @@ document.addEventListener('DOMContentLoaded', () => {
                     <h3><i class="bi bi-info-circle"></i> 关于</h3>
                     <div class="about-info">
                         <div class="about-logo">🚀</div>
-                        <div class="version-tag">Version 1.3.0</div>
+                        <div class="version-tag">Version 1.4.1</div>
                         <div class="setting-label">TransCrypt Pro</div>
                         <div class="setting-description" style="margin-top:12px;">
                             一个基于 Electron 和 FFmpeg 的轻量级开源转换工具。<br>
@@ -3585,6 +3673,801 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     }
 
+    function ensureProfessionalRuntimeStyles() {
+        if (document.getElementById('proConversionRuntimeStyles')) return;
+        const styleEl = document.createElement('style');
+        styleEl.id = 'proConversionRuntimeStyles';
+        styleEl.textContent = `
+            .pro-conversion-page{max-width:1180px;margin-inline:auto}
+            .pro-file-preview{border:1px solid var(--border-color);border-radius:12px;background:var(--surface-color);padding:12px;display:none}
+            .pro-file-preview.show{display:block}
+            .pro-file-preview video,.pro-file-preview audio{width:100%;max-height:260px;border-radius:10px;background:#000}
+            .pro-parameter-panel{display:none;margin-top:16px;padding-top:12px;border-top:1px solid var(--border-color)}
+            .pro-parameter-panel.show{display:block}
+            .pro-layout-grid{display:grid;grid-template-columns:repeat(12,minmax(0,1fr));gap:14px}
+            .pro-section-card{grid-column:span 12;padding:14px;border:1px solid var(--border-color);border-radius:12px;background:var(--surface-color)}
+            .pro-section-card.is-half{grid-column:span 6}
+            .pro-section-title{display:flex;align-items:center;gap:8px;font-size:15px;font-weight:700;margin:0 0 10px 0}
+            .pro-form-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px}
+            .pro-form-grid .form-group{margin-bottom:0}
+            .pro-conversion-page .pro-control{
+                width:100%;
+                max-width:100%;
+                padding:12px 14px;
+                border:1px solid var(--border-color);
+                border-radius:10px;
+                font-size:14px;
+                color:var(--text-main);
+                background:var(--input-bg);
+                outline:none;
+                transition:all .2s ease;
+                box-shadow:var(--shadow-sm);
+            }
+            .pro-conversion-page .pro-control:hover{
+                border-color:var(--primary-color);
+                background:var(--input-hover-bg);
+                box-shadow:var(--shadow-md);
+            }
+            .pro-conversion-page .pro-control:focus{
+                border-color:var(--primary-color);
+                box-shadow:0 0 0 3px var(--primary-light);
+            }
+            .pro-conversion-page .pro-control:disabled{
+                cursor:not-allowed;
+                opacity:.65;
+                background:var(--bg-color);
+                box-shadow:none;
+            }
+            .pro-conversion-page select.pro-control{
+                appearance:none;
+                cursor:pointer;
+                background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' fill='%236b7280' viewBox='0 0 16 16'%3E%3Cpath d='M7.247 11.14 2.451 5.658C1.885 5.013 2.345 4 3.204 4h9.592a1 1 0 0 1 .753 1.659l-4.796 5.48a1 1 0 0 1-1.506 0z'/%3E%3C/svg%3E");
+                background-repeat:no-repeat;
+                background-position:right 12px center;
+                background-size:12px;
+                padding-right:32px;
+            }
+            .pro-advanced-toggle{display:flex;gap:14px;flex-wrap:wrap}
+            .pro-advanced-toggle label{display:flex;gap:8px;align-items:center;margin:0}
+            .pro-actions{display:flex;gap:10px;flex-wrap:wrap}
+            .pro-actions button{margin-top:0}
+            .pro-command-preview,.pro-log-view{width:100%;border:1px solid var(--border-color);border-radius:10px;background:var(--input-bg);color:var(--text-main);padding:10px;font-family:Consolas,monospace;font-size:12px}
+            .pro-command-preview{min-height:88px;resize:vertical}
+            .pro-log-view{min-height:160px;resize:vertical}
+            .pro-progress-row{display:grid;grid-template-columns:1fr auto;gap:12px;align-items:center}
+            .pro-progress-meta{display:flex;gap:14px;flex-wrap:wrap;font-size:12px;color:var(--text-secondary)}
+            .pro-inline{display:flex;gap:10px;flex-wrap:wrap;align-items:center}
+            .pro-inline .secondary-btn,.pro-inline button{margin-top:0}
+            .pro-warning{color:#f59e0b;font-size:12px}
+            .pro-error{color:var(--error-color);font-size:12px}
+            .pro-output-row{display:grid;grid-template-columns:1fr auto;gap:10px}
+            .pro-process-logs-wrap{border:1px solid var(--border-color);border-radius:12px;padding:12px;background:var(--surface-color)}
+            .pro-process-logs-wrap h3{margin:0 0 10px 0;font-size:15px}
+            .pro-hidden{display:none!important}
+            @media (max-width:1080px){.pro-form-grid{grid-template-columns:1fr 1fr}.pro-section-card.is-half{grid-column:span 12}}
+            @media (max-width:680px){.pro-form-grid{grid-template-columns:1fr}.pro-output-row{grid-template-columns:1fr}}
+        `;
+        document.head.appendChild(styleEl);
+    }
+
+    function pathExtLower(filePath) {
+        if (!filePath || typeof filePath !== 'string') return '';
+        const lastDot = filePath.lastIndexOf('.');
+        if (lastDot < 0) return '';
+        return filePath.slice(lastDot + 1).toLowerCase();
+    }
+
+    function pathDir(filePath) {
+        const normalized = String(filePath || '');
+        const idx = Math.max(normalized.lastIndexOf('/'), normalized.lastIndexOf('\\'));
+        if (idx < 0) return '';
+        return normalized.slice(0, idx);
+    }
+
+    function pathBaseNoExt(filePath) {
+        const name = extractFileName(filePath);
+        const idx = name.lastIndexOf('.');
+        if (idx < 0) return name;
+        return name.slice(0, idx);
+    }
+
+    function joinPath(dirPath, fileName) {
+        const dir = String(dirPath || '');
+        if (!dir) return fileName;
+        if (dir.endsWith('\\') || dir.endsWith('/')) return `${dir}${fileName}`;
+        return `${dir}\\${fileName}`;
+    }
+
+    function buildRecommendedOutputPath(sourcePath, container) {
+        const targetContainer = String(container || pathExtLower(sourcePath) || 'mp4').toLowerCase();
+        const fileName = `${pathBaseNoExt(sourcePath)}_pro.${targetContainer}`;
+        return joinPath(pathDir(sourcePath), fileName);
+    }
+
+    function filePathToUrl(filePath) {
+        return encodeURI(`file:///${String(filePath || '').replace(/\\/g, '/')}`);
+    }
+
+    function toInt(value, fallback = 0) {
+        const n = Number(value);
+        return Number.isFinite(n) ? Math.round(n) : fallback;
+    }
+
+    function formatProDuration(seconds) {
+        if (!Number.isFinite(seconds) || seconds < 0) return '--';
+        const total = Math.floor(seconds);
+        const h = Math.floor(total / 3600);
+        const m = Math.floor((total % 3600) / 60);
+        const s = total % 60;
+        if (h > 0) {
+            return `${h}:${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`;
+        }
+        return `${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`;
+    }
+
+    function getProStatusText() {
+        if (proConversionState.status === 'success') return '已完成';
+        if (proConversionState.status === 'error') return '失败';
+        if (proConversionState.status === 'cancelled') return '已取消';
+        if (proConversionState.status === 'paused') return '已暂停';
+        if (proConversionState.status === 'running') return '处理中';
+        return '等待中';
+    }
+
+    function updateProProcessLiveUI() {
+        const barEl = document.getElementById('proProcessBar');
+        const percentEl = document.getElementById('proProcessPercent');
+        const speedEl = document.getElementById('proProcessSpeed');
+        const etaEl = document.getElementById('proProcessEta');
+        const elapsedEl = document.getElementById('proProcessElapsed');
+        const statusEl = document.getElementById('proProcessStatus');
+        const logsEl = document.getElementById('proProcessLogs');
+        if (barEl) barEl.style.width = `${Math.max(0, Math.min(100, Number(proConversionState.percent || 0)))}%`;
+        if (percentEl) percentEl.textContent = `${Math.round(Number(proConversionState.percent || 0))}%`;
+        if (speedEl) speedEl.textContent = proConversionState.speed || '--';
+        if (etaEl) etaEl.textContent = formatProDuration(proConversionState.remainingSec);
+        if (elapsedEl) elapsedEl.textContent = formatProDuration(proConversionState.elapsedSec);
+        if (statusEl) statusEl.textContent = getProStatusText();
+        if (logsEl) {
+            logsEl.value = proConversionState.logs.join('\n');
+            logsEl.scrollTop = logsEl.scrollHeight;
+        }
+    }
+
+    function renderProProcessPage() {
+        ensureUnifiedRuntimeStyles();
+        const finished = ['success', 'cancelled', 'error'].includes(proConversionState.status);
+        const statusClass = proConversionState.status === 'success'
+            ? 'is-success'
+            : (proConversionState.status === 'error' ? 'is-warning' : 'is-running');
+        const summaryText = proConversionState.status === 'success'
+            ? '专业转换完成'
+            : (proConversionState.status === 'error'
+                ? (proConversionState.errorMessage || '任务失败')
+                : (proConversionState.status === 'cancelled' ? '任务已取消' : '正在根据 FFmpeg 输出更新进度'));
+        mainContent.innerHTML = `
+            <div id="proProcessPage" class="unified-progress-page ${statusClass}">
+                <div class="unified-progress-head">
+                    <div>
+                        <h1>${finished ? '专业转换结果' : '专业转换进度'}</h1>
+                        <p>${summaryText}</p>
+                    </div>
+                    <div class="unified-progress-actions">
+                        <button id="proBackToConfigBtn" class="secondary-btn"><i class="bi bi-sliders"></i> 返回参数页</button>
+                        ${!finished ? '<button id="proProcessCancelBtn" class="secondary-btn"><i class="bi bi-x-circle"></i> 取消转换</button>' : ''}
+                        <button id="proOpenOutputBtn" class="secondary-btn" ${(proConversionState.outputPath || proConversionState.sourcePath) ? '' : 'disabled'}><i class="bi bi-folder2-open"></i> 打开所在目录</button>
+                    </div>
+                </div>
+                <div class="unified-progress-overview">
+                    <div class="status-pill"><i class="bi bi-file-earmark"></i> 文件 ${extractFileName(proConversionState.sourcePath) || '--'}</div>
+                    <div class="status-pill"><i class="bi bi-graph-up-arrow"></i> 进度 <strong id="proProcessPercent">0%</strong></div>
+                    <div class="status-pill"><i class="bi bi-speedometer2"></i> 速度 <strong id="proProcessSpeed">--</strong></div>
+                    <div class="status-pill"><i class="bi bi-hourglass-split"></i> 剩余 <strong id="proProcessEta">--</strong></div>
+                    <div class="status-pill"><i class="bi bi-stopwatch"></i> 已耗时 <strong id="proProcessElapsed">--</strong></div>
+                    <div class="status-pill"><i class="bi bi-info-circle"></i> 状态 <strong id="proProcessStatus">等待中</strong></div>
+                </div>
+                <div class="progress-bar-bg unified-progress-bar">
+                    <div class="progress-bar-fill" id="proProcessBar" style="width:0%"></div>
+                </div>
+                <div class="pro-process-logs-wrap">
+                    <h3>转换日志</h3>
+                    <textarea id="proProcessLogs" class="pro-log-view" readonly></textarea>
+                </div>
+            </div>
+        `;
+        const cancelBtn = document.getElementById('proProcessCancelBtn');
+        if (cancelBtn) {
+            cancelBtn.onclick = async () => {
+                if (!proConversionState.taskId || !proConversionState.running) return;
+                const res = await window.electronAPI.proCancelConversion(proConversionState.taskId);
+                if (res.success) {
+                    proConversionState.running = false;
+                    proConversionState.paused = false;
+                    proConversionState.status = 'cancelled';
+                    renderProProcessPage();
+                    showToast('已请求取消任务', 'info');
+                } else {
+                    showToast(res.message || '取消失败', 'error');
+                }
+            };
+        }
+        const openBtn = document.getElementById('proOpenOutputBtn');
+        if (openBtn) {
+            openBtn.onclick = () => {
+                const targetPath = proConversionState.outputPath || proConversionState.sourcePath;
+                if (targetPath) {
+                    window.electronAPI.openPath(pathDir(targetPath));
+                }
+            };
+        }
+        const backBtn = document.getElementById('proBackToConfigBtn');
+        if (backBtn) {
+            backBtn.onclick = () => {
+                loadProfessionalConversionView();
+            };
+        }
+        updateProProcessLiveUI();
+    }
+
+    function buildDefaultProConfig(probe) {
+        const hasVideo = !!(probe && probe.streams && probe.streams.hasVideo);
+        const hasAudio = !!(probe && probe.streams && probe.streams.hasAudio);
+        const container = String((probe && probe.recommended && probe.recommended.container) || (probe && probe.format && probe.format.container) || 'mp4').toLowerCase();
+        const video = probe && probe.streams ? probe.streams.video : null;
+        const audio = probe && probe.streams ? probe.streams.audio : null;
+        return {
+            container,
+            hwAccel: '',
+            videoCodec: hasVideo ? (video && video.codec ? video.codec : 'libx264') : 'none',
+            videoBitrate: video && video.bitrate ? `${Math.max(64, Math.round(video.bitrate / 1000))}k` : '',
+            resolution: video && video.width && video.height ? `${video.width}x${video.height}` : '',
+            fps: video && video.fps ? String(Number(video.fps.toFixed(2))) : '',
+            crf: hasVideo ? '23' : '',
+            preset: hasVideo ? 'medium' : '',
+            profile: video && video.profile ? String(video.profile).toLowerCase() : '',
+            gop: video && video.fps ? String(Math.max(24, Math.round(video.fps * 2))) : '',
+            pixelFormat: video && video.pixelFormat ? video.pixelFormat : '',
+            audioCodec: hasAudio ? (audio && audio.codec ? audio.codec : 'aac') : 'none',
+            sampleRate: audio && audio.sampleRate ? String(audio.sampleRate) : '',
+            channels: audio && audio.channels ? String(audio.channels) : '',
+            audioBitrate: audio && audio.bitrate ? `${Math.max(32, Math.round(audio.bitrate / 1000))}k` : '',
+            stripMetadata: true
+        };
+    }
+
+    function applyProConfigToForm(config) {
+        if (!config) return;
+        const keys = ['container', 'hwAccel', 'videoCodec', 'videoBitrate', 'resolution', 'fps', 'crf', 'preset', 'profile', 'gop', 'pixelFormat', 'audioCodec', 'sampleRate', 'channels', 'audioBitrate'];
+        keys.forEach((key) => {
+            const el = document.getElementById(`pro_${key}`);
+            if (el) el.value = config[key] ?? '';
+        });
+        const stripEl = document.getElementById('pro_stripMetadata');
+        if (stripEl) stripEl.checked = !!config.stripMetadata;
+    }
+
+    function collectProConfigFromForm() {
+        const read = (name) => {
+            const el = document.getElementById(`pro_${name}`);
+            return el ? String(el.value || '').trim() : '';
+        };
+        const stripEl = document.getElementById('pro_stripMetadata');
+        const hwAccel = read('hwAccel').toLowerCase();
+        const qsvMode = hwAccel === 'qsv';
+        const fpsRaw = read('fps');
+        const fpsNumber = Number(fpsRaw);
+        const qsvFps = Number.isFinite(fpsNumber) && fpsNumber > 0 ? String(Math.round(fpsNumber)) : '';
+        return {
+            container: read('container'),
+            hwAccel,
+            videoCodec: qsvMode ? 'h264_qsv' : read('videoCodec'),
+            videoBitrate: read('videoBitrate'),
+            resolution: qsvMode ? '' : read('resolution'),
+            fps: qsvMode ? qsvFps : fpsRaw,
+            crf: qsvMode ? '' : read('crf'),
+            preset: qsvMode ? '' : read('preset'),
+            profile: qsvMode ? '' : read('profile'),
+            gop: read('gop'),
+            pixelFormat: qsvMode ? '' : read('pixelFormat'),
+            audioCodec: read('audioCodec'),
+            sampleRate: read('sampleRate'),
+            channels: read('channels'),
+            audioBitrate: read('audioBitrate'),
+            stripMetadata: !!(stripEl && stripEl.checked)
+        };
+    }
+
+    function setSelectAllowedValues(selectEl, allowedValues, keepEmpty = true) {
+        if (!selectEl) return;
+        const allowSet = new Set(Array.from(allowedValues || []).map((item) => String(item)));
+        let hasEnabled = false;
+        Array.from(selectEl.options || []).forEach((option) => {
+            const value = String(option.value || '');
+            const enabled = keepEmpty && value === '' ? true : allowSet.has(value);
+            option.disabled = !enabled;
+            option.hidden = !enabled;
+            if (enabled) hasEnabled = true;
+        });
+        if (selectEl.options.length > 0 && (!hasEnabled || selectEl.selectedIndex < 0 || selectEl.options[selectEl.selectedIndex]?.disabled)) {
+            const firstEnabled = Array.from(selectEl.options).find((option) => !option.disabled);
+            if (firstEnabled) {
+                selectEl.value = firstEnabled.value;
+            }
+        }
+    }
+
+    function setControlsDisabled(ids, disabled) {
+        ids.forEach((id) => {
+            const control = document.getElementById(id);
+            if (control) {
+                control.disabled = !!disabled;
+            }
+        });
+    }
+
+    async function refreshProCommandPreview() {
+        const commandEl = document.getElementById('proCommandPreview');
+        const statusEl = document.getElementById('proValidationHint');
+        if (!commandEl || !statusEl || !proConversionState.sourcePath) return;
+        if (typeof proControlPolicyUpdater === 'function') {
+            proControlPolicyUpdater();
+        }
+        const outputEl = document.getElementById('proOutputPath');
+        const outputPath = outputEl ? outputEl.value.trim() : '';
+        const config = collectProConfigFromForm();
+        proConversionState.currentConfig = config;
+        const preview = await window.electronAPI.proBuildCommand({
+            sourcePath: proConversionState.sourcePath,
+            outputPath,
+            config,
+            sourceProbe: proConversionState.sourceProbe,
+            resumeFromMs: 0
+        });
+        if (!preview.success) {
+            commandEl.value = '';
+            statusEl.className = 'pro-error';
+            statusEl.textContent = (preview.errors || ['参数组合无效']).join('；');
+            return false;
+        }
+        commandEl.value = preview.command || '';
+        proConversionState.command = preview.command || '';
+        if (Array.isArray(preview.warnings) && preview.warnings.length > 0) {
+            statusEl.className = 'pro-warning';
+            statusEl.textContent = preview.warnings.join('；');
+        } else {
+            statusEl.className = '';
+            statusEl.textContent = '参数校验通过';
+        }
+        return true;
+    }
+
+    function renderProSourceMeta(probe) {
+        const metaEl = document.getElementById('proSourceMeta');
+        if (!metaEl || !probe) return;
+        const duration = probe.format && probe.format.durationSec ? `${Number(probe.format.durationSec.toFixed(2))}s` : '--';
+        const video = probe.streams && probe.streams.video ? `${probe.streams.video.codec || '--'} ${probe.streams.video.width || ''}x${probe.streams.video.height || ''}` : '无';
+        const audio = probe.streams && probe.streams.audio ? `${probe.streams.audio.codec || '--'} ${probe.streams.audio.sampleRate || ''}Hz` : '无';
+        metaEl.innerHTML = `
+            <div class="meta-item"><i class="bi bi-file-earmark"></i><span class="meta-label">输入:</span> ${probe.fileName}</div>
+            <div class="meta-item"><i class="bi bi-clock"></i><span class="meta-label">时长:</span> ${duration}</div>
+            <div class="meta-item"><i class="bi bi-camera-video"></i><span class="meta-label">视频:</span> ${video}</div>
+            <div class="meta-item"><i class="bi bi-music-note"></i><span class="meta-label">音频:</span> ${audio}</div>
+            <div class="meta-item"><i class="bi bi-stars"></i><span class="meta-label">推荐输出:</span> ${(probe.recommended && probe.recommended.container) ? probe.recommended.container.toUpperCase() : '--'}</div>
+        `;
+    }
+
+    function renderProMediaPreview(sourcePath, probe) {
+        const previewWrap = document.getElementById('proMediaPreview');
+        if (!previewWrap) return;
+        const hasVideo = !!(probe && probe.streams && probe.streams.hasVideo);
+        const hasAudio = !!(probe && probe.streams && probe.streams.hasAudio);
+        if (!hasVideo && !hasAudio) {
+            previewWrap.classList.remove('show');
+            previewWrap.innerHTML = '';
+            return;
+        }
+        const src = filePathToUrl(sourcePath);
+        if (hasVideo) {
+            previewWrap.innerHTML = `<video controls preload="metadata" src="${src}"></video>`;
+        } else {
+            previewWrap.innerHTML = `<audio controls preload="metadata" src="${src}"></audio>`;
+        }
+        previewWrap.classList.add('show');
+    }
+
+    function toggleProParameterSections(probe) {
+        const videoSection = document.getElementById('proVideoSection');
+        const audioSection = document.getElementById('proAudioSection');
+        const hasVideo = !!(probe && probe.streams && probe.streams.hasVideo);
+        const hasAudio = !!(probe && probe.streams && probe.streams.hasAudio);
+        if (videoSection) {
+            videoSection.classList.toggle('pro-hidden', !hasVideo);
+        }
+        if (audioSection) {
+            audioSection.classList.toggle('pro-hidden', !hasAudio);
+        }
+    }
+
+    function loadProfessionalConversionView() {
+        ensureProfessionalRuntimeStyles();
+        proConversionState = {
+            sourcePath: '',
+            sourceProbe: null,
+            originalConfig: null,
+            currentConfig: null,
+            outputPath: '',
+            taskId: '',
+            running: false,
+            paused: false,
+            status: 'idle',
+            logs: [],
+            command: '',
+            lastProgress: null,
+            percent: 0,
+            speed: '',
+            remainingSec: null,
+            elapsedSec: 0,
+            errorMessage: ''
+        };
+        proControlPolicyUpdater = null;
+        mainContent.innerHTML = `
+            <h1>专业转换</h1>
+            <p>单文件精细化转换：上传文件后自动解析参数，动态生成完整 FFmpeg 控制面板并支持命令预览。</p>
+            <div class="operation-container pro-conversion-page">
+                <div class="form-group" style="margin-top:14px;">
+                    <label><i class="bi bi-cloud-upload"></i> 选择或拖拽单个文件</label>
+                    <div id="proDropZone" class="drop-zone">
+                        <div class="drop-zone-content">
+                            <div class="drop-zone-icon"><i class="bi bi-file-arrow-up"></i></div>
+                            <div class="drop-zone-text">点击选择文件或拖拽文件到此</div>
+                            <span id="proSelectedName" class="selected-file-name"></span>
+                        </div>
+                    </div>
+                </div>
+                <div id="proSourceMeta" class="file-preview-info"></div>
+                <div id="proMediaPreview" class="pro-file-preview"></div>
+                <div id="proParameterPanel" class="pro-parameter-panel">
+                    <div class="pro-layout-grid">
+                        <section class="pro-section-card is-half">
+                            <h3 class="pro-section-title"><i class="bi bi-box"></i>容器与输出</h3>
+                            <div class="pro-form-grid">
+                                <div class="form-group"><label>容器格式</label><select id="pro_container" class="pro-control"><option value="mp4">MP4</option><option value="mkv">MKV</option><option value="mov">MOV</option><option value="avi">AVI</option><option value="webm">WEBM</option><option value="mp3">MP3</option><option value="aac">AAC</option><option value="m4a">M4A</option><option value="wav">WAV</option><option value="flac">FLAC</option><option value="ogg">OGG</option></select></div>
+                                <div class="form-group"><label>硬件加速</label><select id="pro_hwAccel" class="pro-control"><option value="">关闭</option><option value="qsv">qsv</option></select></div>
+                            </div>
+                            <div class="form-group" style="margin-top:12px;">
+                                <label>输出路径</label>
+                                <div class="pro-output-row">
+                                    <input id="proOutputPath" class="pro-control" type="text" placeholder="输出文件完整路径">
+                                    <button id="proPickOutputDirBtn" class="secondary-btn"><i class="bi bi-folder2-open"></i> 选择目录</button>
+                                </div>
+                            </div>
+                        </section>
+                        <section id="proVideoSection" class="pro-section-card">
+                            <h3 class="pro-section-title"><i class="bi bi-camera-video"></i>视频参数</h3>
+                            <div class="pro-form-grid">
+                                <div class="form-group"><label>视频编码器</label><select id="pro_videoCodec" class="pro-control"><option value="none">none</option><option value="copy">copy</option><option value="libx264">libx264</option><option value="libx265">libx265</option><option value="libvpx">libvpx</option><option value="libvpx-vp9">libvpx-vp9</option><option value="libaom-av1">libaom-av1</option><option value="h264_qsv">h264_qsv</option><option value="hevc_qsv">hevc_qsv</option></select></div>
+                                <div class="form-group"><label>视频码率</label><input id="pro_videoBitrate" class="pro-control" type="text" placeholder="如 2500k"></div>
+                                <div class="form-group"><label>分辨率</label><input id="pro_resolution" class="pro-control" type="text" placeholder="如 1920x1080"></div>
+                                <div class="form-group"><label>帧率 FPS</label><input id="pro_fps" class="pro-control" type="number" min="1" step="0.01"></div>
+                                <div class="form-group" id="pro_crf_group"><label>CRF</label><input id="pro_crf" class="pro-control" type="number" min="0" max="51"></div>
+                                <div class="form-group"><label>Preset</label><select id="pro_preset" class="pro-control"><option value="">默认</option><option value="ultrafast">ultrafast</option><option value="superfast">superfast</option><option value="veryfast">veryfast</option><option value="faster">faster</option><option value="fast">fast</option><option value="medium">medium</option><option value="slow">slow</option><option value="slower">slower</option><option value="veryslow">veryslow</option></select></div>
+                                <div class="form-group"><label>Profile</label><select id="pro_profile" class="pro-control"><option value="">默认</option><option value="baseline">baseline</option><option value="main">main</option><option value="high">high</option><option value="high10">high10</option></select></div>
+                                <div class="form-group"><label>GOP</label><input id="pro_gop" class="pro-control" type="number" min="1"></div>
+                                <div class="form-group"><label>像素格式</label><select id="pro_pixelFormat" class="pro-control"><option value="">默认</option><option value="yuv420p">yuv420p</option><option value="nv12">nv12</option><option value="yuv422p">yuv422p</option><option value="yuv444p">yuv444p</option></select></div>
+                            </div>
+                        </section>
+                        <section id="proAudioSection" class="pro-section-card is-half">
+                            <h3 class="pro-section-title"><i class="bi bi-music-note-beamed"></i>音频参数</h3>
+                            <div class="pro-form-grid">
+                                <div class="form-group"><label>音频编码器</label><select id="pro_audioCodec" class="pro-control"><option value="none">none</option><option value="copy">copy</option><option value="aac">aac</option><option value="libmp3lame">libmp3lame</option><option value="flac">flac</option><option value="libopus">libopus</option><option value="libvorbis">libvorbis</option><option value="ac3">ac3</option></select></div>
+                                <div class="form-group"><label>采样率</label><select id="pro_sampleRate" class="pro-control"><option value="">默认</option><option value="8000">8000</option><option value="10000">10000</option><option value="11025">11025</option><option value="12000">12000</option><option value="16000">16000</option><option value="22050">22050</option><option value="24000">24000</option><option value="32000">32000</option><option value="44100">44100</option><option value="48000">48000</option><option value="96000">96000</option></select></div>
+                                <div class="form-group"><label>声道</label><select id="pro_channels" class="pro-control"><option value="">默认</option><option value="1">1</option><option value="2">2</option><option value="6">6</option></select></div>
+                                <div class="form-group"><label>音频码率</label><input id="pro_audioBitrate" class="pro-control" type="text" placeholder="如 192k"></div>
+                            </div>
+                        </section>
+                        <section class="pro-section-card is-half">
+                            <h3 class="pro-section-title"><i class="bi bi-sliders2"></i>辅助功能</h3>
+                            <div class="pro-advanced-toggle">
+                                <label><input id="pro_stripMetadata" type="checkbox" checked> 删除元数据</label>
+                            </div>
+                            <div class="pro-inline" style="margin-top:12px;">
+                                <button id="proResetConfigBtn" class="secondary-btn"><i class="bi bi-arrow-counterclockwise"></i> 重置参数</button>
+                            </div>
+                        </section>
+                        <section class="pro-section-card">
+                            <h3 class="pro-section-title"><i class="bi bi-terminal"></i>命令与执行</h3>
+                            <div class="form-group">
+                                <label>实时命令预览</label>
+                                <textarea id="proCommandPreview" class="pro-command-preview" readonly></textarea>
+                                <div id="proValidationHint" style="margin-top:6px;font-size:12px;color:var(--text-secondary);">等待参数生成</div>
+                            </div>
+                            <div class="pro-actions">
+                                <button id="proStartBtn"><i class="bi bi-play-circle" style="margin-right:6px;"></i>开始转换</button>
+                                <span style="font-size:12px;color:var(--text-secondary);">开始后将进入过程页面展示详细进度</span>
+                            </div>
+                        </section>
+                    </div>
+                </div>
+            </div>
+        `;
+
+        const proHardwareCaps = {
+            hasIntelQsv: false
+        };
+        const audioOnlyContainers = new Set(['mp3', 'aac', 'm4a', 'wav', 'flac', 'ogg', 'wma']);
+        const webmVideoCodecs = new Set(['libvpx', 'libvpx-vp9', 'libaom-av1', 'none', 'copy']);
+        const webmAudioCodecs = new Set(['libopus', 'libvorbis', 'none', 'copy']);
+        const qsvVideoCodecs = new Set(['h264_qsv', 'none']);
+        const softVideoCodecs = new Set(['libx264', 'libx265', 'libvpx-vp9', 'none', 'copy']);
+        const opusRates = new Set(['8000', '12000', '16000', '24000', '48000']);
+        const commonRates = new Set(['8000', '10000', '11025', '12000', '16000', '22050', '24000', '32000', '44100', '48000', '96000']);
+
+        const enforceProControlPolicy = () => {
+            const probe = proConversionState.sourceProbe || {};
+            const hasVideo = !!(probe.streams && probe.streams.hasVideo);
+            const hasAudio = !!(probe.streams && probe.streams.hasAudio);
+            const containerEl = document.getElementById('pro_container');
+            const hwEl = document.getElementById('pro_hwAccel');
+            const videoCodecEl = document.getElementById('pro_videoCodec');
+            const audioCodecEl = document.getElementById('pro_audioCodec');
+            const sampleRateEl = document.getElementById('pro_sampleRate');
+            const pixelFormatEl = document.getElementById('pro_pixelFormat');
+            const crfGroupEl = document.getElementById('pro_crf_group');
+            const crfEl = document.getElementById('pro_crf');
+            const resolutionEl = document.getElementById('pro_resolution');
+            if (!containerEl || !hwEl || !videoCodecEl || !audioCodecEl || !sampleRateEl || !pixelFormatEl || !crfEl) {
+                return;
+            }
+
+            const qsvHwOption = Array.from(hwEl.options || []).find((option) => String(option.value || '') === 'qsv');
+            if (qsvHwOption) {
+                qsvHwOption.disabled = !proHardwareCaps.hasIntelQsv;
+                qsvHwOption.hidden = !proHardwareCaps.hasIntelQsv;
+                if (qsvHwOption.disabled && hwEl.value === 'qsv') {
+                    hwEl.value = '';
+                }
+            }
+
+            const container = String(containerEl.value || '').toLowerCase();
+            const hw = String(hwEl.value || '').toLowerCase();
+            const isWebm = container === 'webm';
+            const isAudioOnlyContainer = audioOnlyContainers.has(container);
+
+            let allowedVideoCodecs = hasVideo ? (hw === 'qsv' ? qsvVideoCodecs : softVideoCodecs) : new Set(['none']);
+            if (isWebm) {
+                allowedVideoCodecs = hasVideo ? webmVideoCodecs : new Set(['none']);
+            }
+            if (isAudioOnlyContainer) {
+                allowedVideoCodecs = new Set(['none']);
+            }
+            setSelectAllowedValues(videoCodecEl, allowedVideoCodecs, false);
+
+            let allowedAudioCodecs = hasAudio ? new Set(['none', 'copy', 'aac', 'libmp3lame', 'flac', 'libopus', 'libvorbis', 'ac3']) : new Set(['none']);
+            if (isWebm) {
+                allowedAudioCodecs = hasAudio ? webmAudioCodecs : new Set(['none']);
+            }
+            setSelectAllowedValues(audioCodecEl, allowedAudioCodecs, false);
+
+            const currentVideoCodec = String(videoCodecEl.value || '');
+            const currentAudioCodec = String(audioCodecEl.value || '');
+            const videoDisabled = !hasVideo || currentVideoCodec === 'none';
+            const audioDisabled = !hasAudio || currentAudioCodec === 'none';
+            const qsvVideoMode = hw === 'qsv' && !videoDisabled;
+
+            if (qsvVideoMode) {
+                videoCodecEl.value = 'h264_qsv';
+                setSelectAllowedValues(pixelFormatEl, new Set(['', 'yuv420p', 'nv12', 'yuv422p', 'yuv444p']), true);
+                pixelFormatEl.value = '';
+                crfEl.value = '';
+                crfEl.disabled = true;
+                if (crfGroupEl) crfGroupEl.classList.add('pro-hidden');
+                if (resolutionEl) {
+                    resolutionEl.value = '';
+                }
+                const presetEl = document.getElementById('pro_preset');
+                const profileEl = document.getElementById('pro_profile');
+                if (presetEl) presetEl.value = '';
+                if (profileEl) profileEl.value = '';
+            } else {
+                setSelectAllowedValues(pixelFormatEl, new Set(['', 'yuv420p', 'nv12', 'yuv422p', 'yuv444p']), true);
+                crfEl.disabled = videoDisabled;
+                if (crfGroupEl) crfGroupEl.classList.remove('pro-hidden');
+            }
+
+            let allowedSampleRates = commonRates;
+            if (isWebm || currentAudioCodec === 'libopus') {
+                allowedSampleRates = opusRates;
+            }
+            setSelectAllowedValues(sampleRateEl, allowedSampleRates, true);
+
+            setControlsDisabled(['pro_videoBitrate', 'pro_fps', 'pro_crf', 'pro_gop'], videoDisabled);
+            setControlsDisabled(['pro_pixelFormat'], videoDisabled || qsvVideoMode);
+            setControlsDisabled(['pro_preset', 'pro_profile'], videoDisabled || qsvVideoMode);
+            setControlsDisabled(['pro_resolution'], videoDisabled || qsvVideoMode);
+            setControlsDisabled(['pro_sampleRate', 'pro_channels', 'pro_audioBitrate'], audioDisabled);
+        };
+        proControlPolicyUpdater = enforceProControlPolicy;
+
+        const bindParamChangeEvents = () => {
+            const panel = document.getElementById('proParameterPanel');
+            if (!panel) return;
+            panel.querySelectorAll('input,select').forEach((el) => {
+                el.addEventListener('input', () => {
+                    enforceProControlPolicy();
+                    refreshProCommandPreview();
+                });
+                el.addEventListener('change', () => {
+                    if (el.id === 'pro_container' && proConversionState.sourcePath) {
+                        const outputEl = document.getElementById('proOutputPath');
+                        if (outputEl) {
+                            outputEl.value = buildRecommendedOutputPath(proConversionState.sourcePath, el.value);
+                        }
+                    }
+                    enforceProControlPolicy();
+                    refreshProCommandPreview();
+                });
+            });
+        };
+
+        const applySourceFile = async (filePath, fileName) => {
+            const selectedNameEl = document.getElementById('proSelectedName');
+            if (selectedNameEl) selectedNameEl.textContent = `✓ 已选择: ${fileName || extractFileName(filePath)}`;
+            const probeResult = await window.electronAPI.proProbeMedia(filePath);
+            if (!probeResult.success) {
+                showToast(`解析失败: ${probeResult.message}`, 'error', 5000);
+                return;
+            }
+            proConversionState.sourcePath = filePath;
+            proConversionState.sourceProbe = {
+                ...(probeResult.probe || {}),
+                checkpoint: probeResult.checkpoint || null
+            };
+            proConversionState.originalConfig = buildDefaultProConfig(probeResult.probe);
+            proConversionState.currentConfig = { ...proConversionState.originalConfig };
+            proConversionState.outputPath = buildRecommendedOutputPath(filePath, proConversionState.originalConfig.container);
+            renderProSourceMeta(probeResult.probe);
+            renderProMediaPreview(filePath, probeResult.probe);
+            toggleProParameterSections(probeResult.probe);
+            const panel = document.getElementById('proParameterPanel');
+            if (panel) panel.classList.add('show');
+            applyProConfigToForm(proConversionState.currentConfig);
+            try {
+                const hardware = await window.electronAPI.proDetectHardware();
+                proHardwareCaps.hasIntelQsv = !!(hardware && hardware.hasIntelQsv);
+            } catch (error) {
+                proHardwareCaps.hasIntelQsv = false;
+            }
+            if (proHardwareCaps.hasIntelQsv && probeResult.probe && probeResult.probe.streams && probeResult.probe.streams.hasVideo) {
+                const hwEl = document.getElementById('pro_hwAccel');
+                const videoCodecEl = document.getElementById('pro_videoCodec');
+                const pixelFormatEl = document.getElementById('pro_pixelFormat');
+                if (hwEl) hwEl.value = 'qsv';
+                if (videoCodecEl) videoCodecEl.value = 'h264_qsv';
+                if (pixelFormatEl) pixelFormatEl.value = '';
+            }
+            enforceProControlPolicy();
+            const outputEl = document.getElementById('proOutputPath');
+            if (outputEl) outputEl.value = proConversionState.outputPath;
+            proConversionState.logs = [];
+            await refreshProCommandPreview();
+        };
+
+        const dropZone = document.getElementById('proDropZone');
+        if (dropZone) {
+            dropZone.addEventListener('click', async () => {
+                const picked = await window.electronAPI.selectPath(['openFile']);
+                if (picked && picked.success && picked.filePath) {
+                    await applySourceFile(picked.filePath, picked.fileName);
+                }
+            });
+            ['dragenter', 'dragover'].forEach((eventName) => {
+                dropZone.addEventListener(eventName, (event) => {
+                    event.preventDefault();
+                    event.stopPropagation();
+                    dropZone.classList.add('dragover');
+                });
+            });
+            ['dragleave', 'drop'].forEach((eventName) => {
+                dropZone.addEventListener(eventName, (event) => {
+                    event.preventDefault();
+                    event.stopPropagation();
+                    dropZone.classList.remove('dragover');
+                });
+            });
+            dropZone.addEventListener('drop', async (event) => {
+                const files = Array.from((event.dataTransfer && event.dataTransfer.files) || []);
+                if (files.length === 0) return;
+                const first = files[0];
+                const filePath = window.electronAPI.getFilePath(first);
+                if (!filePath) {
+                    showToast('无法读取拖拽文件路径', 'error');
+                    return;
+                }
+                await applySourceFile(filePath, first.name);
+            });
+        }
+
+        document.getElementById('proPickOutputDirBtn').addEventListener('click', async () => {
+            if (!proConversionState.sourcePath) {
+                showToast('请先上传文件', 'info');
+                return;
+            }
+            const result = await window.electronAPI.selectOutputDirectory();
+            if (!result.success || !result.directoryPath) return;
+            const containerEl = document.getElementById('pro_container');
+            const targetContainer = containerEl ? containerEl.value : pathExtLower(proConversionState.sourcePath);
+            const outputEl = document.getElementById('proOutputPath');
+            if (outputEl) {
+                outputEl.value = joinPath(result.directoryPath, `${pathBaseNoExt(proConversionState.sourcePath)}_pro.${targetContainer}`);
+            }
+            refreshProCommandPreview();
+        });
+
+        document.getElementById('proResetConfigBtn').addEventListener('click', () => {
+            if (!proConversionState.originalConfig) return;
+            applyProConfigToForm(proConversionState.originalConfig);
+            enforceProControlPolicy();
+            const outputEl = document.getElementById('proOutputPath');
+            if (outputEl) {
+                outputEl.value = buildRecommendedOutputPath(proConversionState.sourcePath, proConversionState.originalConfig.container);
+            }
+            refreshProCommandPreview();
+        });
+
+        document.getElementById('proStartBtn').addEventListener('click', async () => {
+            if (!proConversionState.sourcePath) {
+                showToast('请先选择文件', 'error');
+                return;
+            }
+            if (proConversionState.running) {
+                showToast('已有任务在运行', 'info');
+                return;
+            }
+            const outputEl = document.getElementById('proOutputPath');
+            const outputPath = outputEl ? outputEl.value.trim() : '';
+            if (!outputPath) {
+                showToast('请先设置输出路径', 'error');
+                return;
+            }
+            const valid = await refreshProCommandPreview();
+            if (!valid) {
+                showToast('参数校验未通过', 'error');
+                return;
+            }
+            proConversionState.taskId = `pro-${Date.now()}`;
+            proConversionState.running = true;
+            proConversionState.paused = false;
+            proConversionState.status = 'running';
+            proConversionState.logs = [];
+            proConversionState.percent = 0;
+            proConversionState.speed = '';
+            proConversionState.remainingSec = null;
+            proConversionState.elapsedSec = 0;
+            proConversionState.errorMessage = '';
+            proConversionState.outputPath = outputPath;
+            const config = collectProConfigFromForm();
+            const startResult = await window.electronAPI.proStartConversion({
+                taskId: proConversionState.taskId,
+                sourcePath: proConversionState.sourcePath,
+                outputPath,
+                config,
+                sourceProbe: proConversionState.sourceProbe,
+                resumeFromCheckpoint: false
+            });
+            if (!startResult.success) {
+                proConversionState.running = false;
+                proConversionState.status = 'error';
+                showToast(startResult.message || '启动转换失败', 'error', 5000);
+                return;
+            }
+            renderProProcessPage();
+            showToast('专业转换任务已启动', 'success', 2500);
+        });
+
+        bindParamChangeEvents();
+        enforceProControlPolicy();
+    }
+
     function stopHomeCarousel() {
         if (homeCarouselTimer) {
             clearInterval(homeCarouselTimer);
@@ -3613,6 +4496,7 @@ document.addEventListener('DOMContentLoaded', () => {
         ];
         const featureCards = [
             { emoji: '🚀', title: '文件转换中心', desc: '统一处理图片、视频、音频、文档转换任务。', target: 'conversion', actionText: '进入转换中心' },
+            { emoji: '🎬', title: '专业转换', desc: '基于 FFprobe 与 FFmpeg 的细粒度参数控制与实时命令预览。', target: 'pro-conversion', actionText: '进入专业转换' },
             { emoji: '🔒', title: '文件加密', desc: '快速加密敏感文件，保护本地与传输过程安全。', target: 'encryption', actionText: '进入文件加密' },
             { emoji: '🔓', title: '文件解密', desc: '还原加密文件并校验结果，确保可用性。', target: 'decryption', actionText: '进入文件解密' },
             { emoji: '🎭', title: '文件伪装加密', desc: '将加密内容封装为常见文件形态，便于管理。', target: 'disguise', actionText: '进入伪装加密' },
@@ -3710,6 +4594,10 @@ document.addEventListener('DOMContentLoaded', () => {
         }
         if (category === 'conversion') {
             loadUnifiedConversionView();
+            return;
+        }
+        if (category === 'pro-conversion') {
+            loadProfessionalConversionView();
             return;
         }
         if (category === 'settings') {

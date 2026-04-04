@@ -39,5 +39,15 @@ contextBridge.exposeInMainWorld('electronAPI', {
     calculateHash: (filePath, algorithm) => ipcRenderer.invoke('calculate-hash', { filePath, algorithm }),
     consumePendingLaunchAction: () => ipcRenderer.invoke('consume-pending-launch-action'),
     onLaunchContextAction: (callback) => ipcRenderer.on('launch-context-action', (_event, payload) => callback(payload)),
+    proCheckTools: () => ipcRenderer.invoke('pro-check-tools'),
+    proDetectHardware: () => ipcRenderer.invoke('pro-detect-hardware'),
+    proProbeMedia: (filePath) => ipcRenderer.invoke('pro-probe-media', { filePath }),
+    proBuildCommand: (payload) => ipcRenderer.invoke('pro-build-command', payload),
+    proStartConversion: (payload) => ipcRenderer.invoke('pro-start-conversion', payload),
+    proPauseConversion: (taskId) => ipcRenderer.invoke('pro-pause-conversion', { taskId }),
+    proResumeConversion: (taskId) => ipcRenderer.invoke('pro-resume-conversion', { taskId }),
+    proCancelConversion: (taskId) => ipcRenderer.invoke('pro-cancel-conversion', { taskId }),
+    proGetCheckpoint: (sourcePath) => ipcRenderer.invoke('pro-get-checkpoint', { sourcePath }),
+    onProConversionEvent: (callback) => ipcRenderer.on('pro-conversion-event', (_event, payload) => callback(payload)),
     on: (channel, callback) => ipcRenderer.on(channel, (_event, ...args) => callback(...args))
 });
