@@ -6,7 +6,7 @@ const path = require('path');
 const os = require('os');
 const { nativeImage } = require('electron');
 const { Worker } = require('worker_threads');
-const { execSync, execFileSync } = require('child_process');
+const { execSync, execFileSync, spawn } = require('child_process');
 const crypto = require('crypto');
 const archiver = require('archiver');
 const yauzl = require('yauzl');
@@ -69,6 +69,8 @@ const ORIGINAL_FORMAT_VALUE = '__original__';
 
 const settingsPath = path.join(app.getPath('userData'), 'settings.json');
 const activeBatchControllers = new Map();
+const activeProConversions = new Map();
+const proResumeCheckpoints = new Map();
 let mainWindow = null;
 let pendingLaunchAction = null;
 const safeboxSessions = new Map();
@@ -2082,6 +2084,302 @@ ipcMain.handle('list-safebox-sessions', async () => {
     }));
 });
 
+function runProbe(filePath) {
+    if (!ffprobePath) {
+        throw new Error('未找到 FFprobe，请确认 FFmpeg 已正确安装');
+    }
+    const probeRaw = execFileSync(
+        ffprobePath,
+        [
+            '-v', 'error',
+            '-show_entries', 'format=filename,format_name,duration,size,bit_rate:stream=index,codec_type,codec_name,width,height,r_frame_rate,avg_frame_rate,bit_rate,pix_fmt,profile,sample_rate,channels',
+            '-of', 'json',
+            filePath
+        ],
+        {
+            encoding: 'utf8',
+            windowsHide: true,
+            maxBuffer: 1024 * 1024 * 16
+        }
+    );
+    return JSON.parse(probeRaw || '{}');
+}
+
+function parseFps(raw) {
+    if (!raw || typeof raw !== 'string') return 0;
+    if (!raw.includes('/')) {
+        const num = Number(raw);
+        return Number.isFinite(num) ? num : 0;
+    }
+    const [a, b] = raw.split('/');
+    const an = Number(a);
+    const bn = Number(b);
+    if (!Number.isFinite(an) || !Number.isFinite(bn) || bn === 0) return 0;
+    return an / bn;
+}
+
+function toNumber(value, fallback = 0) {
+    const n = Number(value);
+    return Number.isFinite(n) ? n : fallback;
+}
+
+function getMediaProbe(filePath) {
+    const probe = runProbe(filePath);
+    const format = probe.format || {};
+    const streams = Array.isArray(probe.streams) ? probe.streams : [];
+    const videoStream = streams.find((item) => item.codec_type === 'video');
+    const audioStream = streams.find((item) => item.codec_type === 'audio');
+    const sourceExt = path.extname(filePath).replace('.', '').toLowerCase();
+    const container = sourceExt || String(format.format_name || '').split(',')[0] || '';
+    const durationSec = toNumber(format.duration, 0);
+    const videoCodec = videoStream ? String(videoStream.codec_name || '') : '';
+    const audioCodec = audioStream ? String(audioStream.codec_name || '') : '';
+    let recommendedContainer = container;
+    if (videoStream) {
+        if (['avi', 'flv'].includes(container)) recommendedContainer = 'mp4';
+        if (['wmv'].includes(container)) recommendedContainer = 'mkv';
+        if (videoCodec.includes('vp9') || videoCodec.includes('av1')) recommendedContainer = 'webm';
+    } else if (audioStream) {
+        if (container === 'wav') recommendedContainer = 'flac';
+        if (container === 'wma') recommendedContainer = 'm4a';
+    }
+    return {
+        sourcePath: filePath,
+        fileName: path.basename(filePath),
+        format: {
+            container,
+            formatName: String(format.format_name || ''),
+            durationSec,
+            sizeBytes: toNumber(format.size, 0),
+            bitrate: toNumber(format.bit_rate, 0)
+        },
+        streams: {
+            hasVideo: !!videoStream,
+            hasAudio: !!audioStream,
+            video: videoStream
+                ? {
+                    codec: String(videoStream.codec_name || ''),
+                    width: toNumber(videoStream.width, 0),
+                    height: toNumber(videoStream.height, 0),
+                    fps: parseFps(String(videoStream.avg_frame_rate || videoStream.r_frame_rate || '0')),
+                    bitrate: toNumber(videoStream.bit_rate, 0),
+                    pixelFormat: String(videoStream.pix_fmt || ''),
+                    profile: String(videoStream.profile || '')
+                }
+                : null,
+            audio: audioStream
+                ? {
+                    codec: String(audioStream.codec_name || ''),
+                    sampleRate: toNumber(audioStream.sample_rate, 0),
+                    channels: toNumber(audioStream.channels, 0),
+                    bitrate: toNumber(audioStream.bit_rate, 0)
+                }
+                : null
+        },
+        recommended: {
+            container: recommendedContainer
+        }
+    };
+}
+
+function normalizeVideoCodec(codecValue) {
+    const codec = String(codecValue || '').trim();
+    return codec || '';
+}
+
+function buildProfessionalConversionArgs({
+    sourcePath,
+    outputPath,
+    config,
+    sourceProbe,
+    resumeFromMs = 0
+}) {
+    const cfg = config || {};
+    const errors = [];
+    const warnings = [];
+    const hasVideo = !!(sourceProbe && sourceProbe.streams && sourceProbe.streams.hasVideo);
+    const hasAudio = !!(sourceProbe && sourceProbe.streams && sourceProbe.streams.hasAudio);
+    const container = String(cfg.container || '').toLowerCase();
+    const isAudioContainer = ['mp3', 'aac', 'm4a', 'wav', 'flac', 'ogg', 'wma'].includes(container);
+    const isWebmContainer = container === 'webm';
+    const qsvVideoCodecs = new Set(['h264_qsv', 'hevc_qsv']);
+    const webmVideoCodecs = new Set(['libvpx', 'libvpx-vp9', 'libaom-av1']);
+    const webmAudioCodecs = new Set(['libopus', 'libvorbis']);
+    const opusSampleRates = new Set(['8000', '12000', '16000', '24000', '48000']);
+    const videoCodec = normalizeVideoCodec(cfg.videoCodec);
+    const audioCodec = String(cfg.audioCodec || '').trim();
+    const hwAccel = String(cfg.hwAccel || '').toLowerCase();
+    const pixelFormat = String(cfg.pixelFormat || '').toLowerCase();
+    const sampleRate = String(cfg.sampleRate || '').trim();
+
+    if (videoCodec === 'copy' && (cfg.videoBitrate || cfg.crf || cfg.preset || cfg.profile || cfg.gop || cfg.pixelFormat || cfg.fps || cfg.resolution)) {
+        errors.push('视频编码器为 copy 时，不能同时设置码率、CRF、预设、Profile、GOP、像素格式、帧率或分辨率');
+    }
+    if (audioCodec === 'copy' && (cfg.audioBitrate || cfg.sampleRate || cfg.channels)) {
+        errors.push('音频编码器为 copy 时，不能同时设置音频码率、采样率或声道');
+    }
+    if (isAudioContainer && videoCodec && videoCodec !== 'none') {
+        errors.push('目标容器为音频格式时，视频流必须设置为 none');
+    }
+    if (hwAccel === 'qsv' && videoCodec && videoCodec !== 'none' && !qsvVideoCodecs.has(videoCodec)) {
+        errors.push('QSV 硬件加速模式下，视频编码器仅允许 h264_qsv 或 hevc_qsv');
+    }
+    if (hwAccel === 'qsv' && cfg.crf !== '' && cfg.crf !== undefined && cfg.crf !== null) {
+        errors.push('QSV 硬件加速模式下不支持 CRF 参数');
+    }
+    if (hwAccel === 'qsv' && pixelFormat && pixelFormat !== 'nv12') {
+        errors.push('QSV 硬件加速模式下像素格式仅支持 nv12');
+    }
+    if (isWebmContainer && videoCodec && videoCodec !== 'none' && videoCodec !== 'copy' && !webmVideoCodecs.has(videoCodec)) {
+        errors.push('WebM 容器仅支持 VP8/VP9/AV1 视频编码器');
+    }
+    if (isWebmContainer && audioCodec && audioCodec !== 'none' && audioCodec !== 'copy' && !webmAudioCodecs.has(audioCodec)) {
+        errors.push('WebM 容器仅支持 Opus/Vorbis 音频编码器');
+    }
+    if (isWebmContainer && sampleRate && !opusSampleRates.has(sampleRate)) {
+        errors.push('WebM 容器采样率仅支持 8000/12000/16000/24000/48000');
+    }
+    if (audioCodec === 'libopus' && sampleRate && !opusSampleRates.has(sampleRate)) {
+        errors.push('Opus 编码仅支持 8000/12000/16000/24000/48000 采样率');
+    }
+    if (!hasVideo && videoCodec && videoCodec !== 'none') {
+        warnings.push('源文件不包含视频流，视频参数将被忽略');
+    }
+    if (!hasAudio && audioCodec && audioCodec !== 'none') {
+        warnings.push('源文件不包含音频流，音频参数将被忽略');
+    }
+    if (cfg.crf && cfg.videoBitrate) {
+        warnings.push('同时设置 CRF 与视频码率时，编码器行为可能与预期不一致');
+    }
+
+    if (errors.length > 0) {
+        return { errors, warnings, args: [] };
+    }
+
+    const args = ['-hide_banner', '-y'];
+    if (resumeFromMs > 0) {
+        args.push('-ss', (resumeFromMs / 1000).toFixed(3));
+    }
+    if (hwAccel && videoCodec && videoCodec !== 'copy' && videoCodec !== 'none') {
+        args.push('-hwaccel', hwAccel);
+        if (hwAccel === 'qsv') {
+            args.push('-hwaccel_output_format', 'qsv');
+        }
+    }
+    args.push('-i', sourcePath);
+
+    if (cfg.stripMetadata) {
+        args.push('-map_metadata', '-1', '-map_chapters', '-1');
+    }
+
+    if (hasVideo && !isAudioContainer) {
+        if (videoCodec === 'none') {
+            args.push('-vn');
+        } else if (videoCodec === 'copy') {
+            args.push('-c:v', 'copy');
+        } else if (videoCodec) {
+            args.push('-c:v', videoCodec);
+        }
+        if (cfg.videoBitrate) args.push('-b:v', String(cfg.videoBitrate));
+        if (cfg.fps) args.push('-r', String(cfg.fps));
+        if (hwAccel !== 'qsv' && cfg.crf !== '' && cfg.crf !== undefined && cfg.crf !== null) args.push('-crf', String(cfg.crf));
+        if (cfg.preset) args.push('-preset', String(cfg.preset));
+        if (cfg.profile) args.push('-profile:v', String(cfg.profile));
+        if (cfg.gop) args.push('-g', String(cfg.gop));
+        if (cfg.pixelFormat) args.push('-pix_fmt', String(cfg.pixelFormat));
+        if (cfg.resolution) {
+            const [w, h] = String(cfg.resolution).toLowerCase().split('x');
+            if (toNumber(w, 0) > 0 && toNumber(h, 0) > 0) {
+                args.push('-vf', `scale=${w}:${h}`);
+            }
+        }
+    } else {
+        args.push('-vn');
+    }
+
+    if (hasAudio) {
+        if (audioCodec === 'none') {
+            args.push('-an');
+        } else if (audioCodec === 'copy') {
+            args.push('-c:a', 'copy');
+        } else if (audioCodec) {
+            args.push('-c:a', audioCodec);
+        }
+        if (cfg.audioBitrate) args.push('-b:a', String(cfg.audioBitrate));
+        if (cfg.sampleRate) args.push('-ar', String(cfg.sampleRate));
+        if (cfg.channels) args.push('-ac', String(cfg.channels));
+    } else {
+        args.push('-an');
+    }
+
+    if (cfg.container) {
+        args.push('-f', String(cfg.container).toLowerCase());
+    }
+
+    if (String(cfg.container || '').toLowerCase() === 'mp4') {
+        args.push('-movflags', '+faststart');
+    }
+
+    args.push('-progress', 'pipe:1', '-nostats', outputPath);
+    return { errors, warnings, args };
+}
+
+function detectHardwareAccelerationCapabilities() {
+    const defaultResult = {
+        success: true,
+        gpus: [],
+        hasIntelQsv: false,
+        preferHwAccel: '',
+        supportedHwAccels: []
+    };
+    if (process.platform !== 'win32') {
+        return defaultResult;
+    }
+    try {
+        const output = execFileSync(
+            'powershell',
+            [
+                '-NoProfile',
+                '-ExecutionPolicy', 'Bypass',
+                '-Command',
+                "Get-CimInstance Win32_VideoController | Select-Object -ExpandProperty Name"
+            ],
+            {
+                encoding: 'utf8',
+                windowsHide: true,
+                maxBuffer: 1024 * 1024 * 4
+            }
+        );
+        const gpus = String(output || '')
+            .split(/\r?\n/)
+            .map((line) => line.trim())
+            .filter(Boolean);
+        const hasIntelQsv = gpus.some((name) => /intel/i.test(name) && /(uhd|iris|xe|graphics|hd)/i.test(name));
+        return {
+            success: true,
+            gpus,
+            hasIntelQsv,
+            preferHwAccel: hasIntelQsv ? 'qsv' : '',
+            supportedHwAccels: hasIntelQsv ? ['qsv'] : []
+        };
+    } catch (error) {
+        return {
+            ...defaultResult,
+            success: false,
+            message: error.message
+        };
+    }
+}
+
+function quoteCommandArg(value) {
+    const raw = String(value ?? '');
+    if (!raw) return '""';
+    if (/[\s"&<>|^]/.test(raw)) {
+        return `"${raw.replace(/"/g, '\\"')}"`;
+    }
+    return raw;
+}
+
 ipcMain.handle('get-file-info', async (event, filePath) => {
     try {
         const stats = await fsp.stat(filePath);
@@ -2109,6 +2407,320 @@ ipcMain.handle('get-file-info', async (event, filePath) => {
     } catch (e) {
         return null;
     }
+});
+
+ipcMain.handle('pro-check-tools', async () => {
+    const ffmpegReady = !!(ffmpegPath && fs.existsSync(ffmpegPath));
+    const ffprobeReady = !!(ffprobePath && fs.existsSync(ffprobePath));
+    return {
+        success: ffmpegReady && ffprobeReady,
+        ffmpegReady,
+        ffprobeReady,
+        ffmpegPath: ffmpegReady ? ffmpegPath : null,
+        ffprobePath: ffprobeReady ? ffprobePath : null,
+        message: ffmpegReady && ffprobeReady
+            ? 'FFmpeg 与 FFprobe 可用'
+            : 'FFmpeg 或 FFprobe 不可用，请检查安装'
+    };
+});
+
+ipcMain.handle('pro-detect-hardware', async () => {
+    return detectHardwareAccelerationCapabilities();
+});
+
+ipcMain.handle('pro-probe-media', async (_event, { filePath }) => {
+    try {
+        if (!filePath) {
+            throw new Error('缺少文件路径');
+        }
+        const stats = await fsp.stat(filePath);
+        if (!stats.isFile()) {
+            throw new Error('仅支持单个文件');
+        }
+        const probe = getMediaProbe(filePath);
+        const checkpoint = proResumeCheckpoints.get(filePath);
+        return {
+            success: true,
+            probe,
+            checkpoint: checkpoint || null
+        };
+    } catch (error) {
+        return {
+            success: false,
+            message: error.message
+        };
+    }
+});
+
+ipcMain.handle('pro-build-command', async (_event, payload) => {
+    try {
+        if (!payload || !payload.sourcePath || !payload.outputPath) {
+            throw new Error('缺少 sourcePath 或 outputPath');
+        }
+        const sourceProbe = payload.sourceProbe || getMediaProbe(payload.sourcePath);
+        const built = buildProfessionalConversionArgs({
+            sourcePath: payload.sourcePath,
+            outputPath: payload.outputPath,
+            config: payload.config || {},
+            sourceProbe,
+            resumeFromMs: toNumber(payload.resumeFromMs, 0)
+        });
+        return {
+            success: built.errors.length === 0,
+            errors: built.errors,
+            warnings: built.warnings,
+            args: built.args,
+            command: built.errors.length > 0
+                ? ''
+                : `"${ffmpegPath}" ${built.args.map(quoteCommandArg).join(' ')}`
+        };
+    } catch (error) {
+        return {
+            success: false,
+            errors: [error.message],
+            warnings: [],
+            args: [],
+            command: ''
+        };
+    }
+});
+
+ipcMain.handle('pro-start-conversion', async (event, payload) => {
+    try {
+        if (!ffmpegPath || !fs.existsSync(ffmpegPath)) {
+            throw new Error('FFmpeg 不可用');
+        }
+        const taskId = String(payload && payload.taskId ? payload.taskId : crypto.randomUUID());
+        const sourcePath = payload && payload.sourcePath;
+        const outputPath = payload && payload.outputPath;
+        if (!sourcePath || !outputPath) {
+            throw new Error('缺少输入或输出路径');
+        }
+        if (activeProConversions.has(taskId)) {
+            throw new Error('任务 ID 已存在');
+        }
+        const sourceProbe = payload.sourceProbe || getMediaProbe(sourcePath);
+        const checkpoint = proResumeCheckpoints.get(sourcePath);
+        const shouldResumeFromCheckpoint = !!(payload && payload.resumeFromCheckpoint && checkpoint && checkpoint.timeMs > 0);
+        const resumeFromMs = shouldResumeFromCheckpoint
+            ? checkpoint.timeMs
+            : toNumber(payload && payload.resumeFromMs, 0);
+        const built = buildProfessionalConversionArgs({
+            sourcePath,
+            outputPath,
+            config: payload && payload.config ? payload.config : {},
+            sourceProbe,
+            resumeFromMs
+        });
+        if (built.errors.length > 0) {
+            return {
+                success: false,
+                message: built.errors[0],
+                errors: built.errors,
+                warnings: built.warnings
+            };
+        }
+
+        const ffmpeg = spawn(ffmpegPath, built.args, {
+            stdio: ['pipe', 'pipe', 'pipe'],
+            windowsHide: true
+        });
+        const runtime = {
+            taskId,
+            process: ffmpeg,
+            sourcePath,
+            outputPath,
+            startedAt: Date.now(),
+            paused: false,
+            cancelled: false,
+            lastOutTimeMs: resumeFromMs,
+            durationSec: toNumber(sourceProbe && sourceProbe.format ? sourceProbe.format.durationSec : 0, 0)
+        };
+        activeProConversions.set(taskId, runtime);
+
+        let stdoutBuffer = '';
+        const sendEvent = (payloadPart) => {
+            if (event && event.sender && !event.sender.isDestroyed()) {
+                event.sender.send('pro-conversion-event', { taskId, ...payloadPart });
+            }
+        };
+
+        sendEvent({
+            type: 'state',
+            state: 'running',
+            warnings: built.warnings,
+            command: `"${ffmpegPath}" ${built.args.map(quoteCommandArg).join(' ')}`
+        });
+
+        ffmpeg.stdout.on('data', (chunk) => {
+            stdoutBuffer += chunk.toString();
+            const lines = stdoutBuffer.split(/\r?\n/);
+            stdoutBuffer = lines.pop() || '';
+            const progressData = {};
+            for (const line of lines) {
+                if (!line || !line.includes('=')) continue;
+                const idx = line.indexOf('=');
+                const key = line.slice(0, idx).trim();
+                const value = line.slice(idx + 1).trim();
+                progressData[key] = value;
+            }
+            const outTimeMs = toNumber(progressData.out_time_ms, runtime.lastOutTimeMs);
+            runtime.lastOutTimeMs = Math.max(runtime.lastOutTimeMs, outTimeMs);
+            if (Object.keys(progressData).length > 0) {
+                const elapsedSec = Math.max(0, (Date.now() - runtime.startedAt) / 1000);
+                const processedSec = runtime.lastOutTimeMs / 1000000;
+                const speedRaw = String(progressData.speed || '0x').replace('x', '');
+                const speedValue = toNumber(speedRaw, 0);
+                const percent = runtime.durationSec > 0
+                    ? Math.max(0, Math.min(100, Number(((processedSec / runtime.durationSec) * 100).toFixed(2))))
+                    : 0;
+                const remainingSec = speedValue > 0 && runtime.durationSec > 0
+                    ? Math.max(0, (runtime.durationSec - processedSec) / speedValue)
+                    : null;
+                sendEvent({
+                    type: 'progress',
+                    percent,
+                    elapsedSec: Number(elapsedSec.toFixed(2)),
+                    remainingSec: remainingSec === null ? null : Number(remainingSec.toFixed(2)),
+                    speed: progressData.speed || '',
+                    fps: progressData.fps || '',
+                    frame: progressData.frame || '',
+                    outTimeMs: runtime.lastOutTimeMs
+                });
+            }
+        });
+
+        ffmpeg.stderr.on('data', (chunk) => {
+            const text = chunk.toString();
+            const lines = text.split(/\r?\n/).filter(Boolean);
+            for (const line of lines) {
+                sendEvent({
+                    type: 'log',
+                    level: /error/i.test(line) ? 'error' : 'info',
+                    line
+                });
+            }
+        });
+
+        ffmpeg.on('error', (err) => {
+            activeProConversions.delete(taskId);
+            sendEvent({
+                type: 'error',
+                message: err.message
+            });
+        });
+
+        ffmpeg.on('close', (code) => {
+            activeProConversions.delete(taskId);
+            if (runtime.cancelled) {
+                proResumeCheckpoints.set(sourcePath, {
+                    timeMs: runtime.lastOutTimeMs,
+                    updatedAt: Date.now()
+                });
+                sendEvent({
+                    type: 'state',
+                    state: 'cancelled',
+                    checkpointMs: runtime.lastOutTimeMs
+                });
+                return;
+            }
+            if (code === 0) {
+                proResumeCheckpoints.delete(sourcePath);
+                sendEvent({
+                    type: 'success',
+                    outputPath,
+                    checkpointMs: 0
+                });
+                return;
+            }
+            proResumeCheckpoints.set(sourcePath, {
+                timeMs: runtime.lastOutTimeMs,
+                updatedAt: Date.now()
+            });
+            sendEvent({
+                type: 'error',
+                message: `FFmpeg 退出码: ${code}`,
+                checkpointMs: runtime.lastOutTimeMs
+            });
+        });
+
+        return {
+            success: true,
+            taskId,
+            warnings: built.warnings
+        };
+    } catch (error) {
+        return {
+            success: false,
+            message: error.message
+        };
+    }
+});
+
+ipcMain.handle('pro-pause-conversion', async (_event, { taskId }) => {
+    try {
+        const runtime = activeProConversions.get(taskId);
+        if (!runtime || !runtime.process) {
+            throw new Error('未找到正在运行的任务');
+        }
+        if (runtime.paused) {
+            return { success: true, state: 'paused' };
+        }
+        runtime.process.stdin.write('p');
+        runtime.paused = true;
+        return { success: true, state: 'paused' };
+    } catch (error) {
+        return { success: false, message: error.message };
+    }
+});
+
+ipcMain.handle('pro-resume-conversion', async (_event, { taskId }) => {
+    try {
+        const runtime = activeProConversions.get(taskId);
+        if (!runtime || !runtime.process) {
+            throw new Error('未找到正在运行的任务');
+        }
+        if (!runtime.paused) {
+            return { success: true, state: 'running' };
+        }
+        runtime.process.stdin.write('p');
+        runtime.paused = false;
+        return { success: true, state: 'running' };
+    } catch (error) {
+        return { success: false, message: error.message };
+    }
+});
+
+ipcMain.handle('pro-cancel-conversion', async (_event, { taskId }) => {
+    try {
+        const runtime = activeProConversions.get(taskId);
+        if (!runtime || !runtime.process) {
+            throw new Error('未找到正在运行的任务');
+        }
+        runtime.cancelled = true;
+        try {
+            runtime.process.stdin.write('q');
+        } catch (error) {
+            try {
+                runtime.process.kill();
+            } catch (killError) {
+            }
+        }
+        return { success: true };
+    } catch (error) {
+        return { success: false, message: error.message };
+    }
+});
+
+ipcMain.handle('pro-get-checkpoint', async (_event, { sourcePath }) => {
+    if (!sourcePath) {
+        return { success: false, message: '缺少 sourcePath' };
+    }
+    const checkpoint = proResumeCheckpoints.get(sourcePath) || null;
+    return {
+        success: true,
+        checkpoint
+    };
 });
 
 ipcMain.handle('get-path-type', async (_event, filePath) => {
