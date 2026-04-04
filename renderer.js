@@ -584,9 +584,15 @@ document.addEventListener('DOMContentLoaded', () => {
         taskId: '',
         running: false,
         paused: false,
+        status: 'idle',
         logs: [],
         command: '',
-        lastProgress: null
+        lastProgress: null,
+        percent: 0,
+        speed: '',
+        remainingSec: null,
+        elapsedSec: 0,
+        errorMessage: ''
     };
     let proControlPolicyUpdater = null;
 
@@ -856,56 +862,60 @@ document.addEventListener('DOMContentLoaded', () => {
             if (proConversionState.logs.length > 500) {
                 proConversionState.logs = proConversionState.logs.slice(-500);
             }
-            const logEl = document.getElementById('proConversionLogs');
-            if (logEl) {
-                logEl.value = proConversionState.logs.join('\n');
-                logEl.scrollTop = logEl.scrollHeight;
-            }
+            updateProProcessLiveUI();
             return;
         }
         if (payload.type === 'progress') {
             proConversionState.lastProgress = payload;
-            const progressBar = document.getElementById('proProgressBar');
-            const progressText = document.getElementById('proProgressText');
-            const speedEl = document.getElementById('proProgressSpeed');
-            const etaEl = document.getElementById('proProgressEta');
-            if (progressBar) progressBar.style.width = `${payload.percent || 0}%`;
-            if (progressText) progressText.textContent = `${payload.percent || 0}%`;
-            if (speedEl) speedEl.textContent = payload.speed || '--';
-            if (etaEl) etaEl.textContent = payload.remainingSec === null ? '--' : `${payload.remainingSec}s`;
+            proConversionState.percent = Number(payload.percent || 0);
+            proConversionState.speed = payload.speed || '';
+            proConversionState.remainingSec = payload.remainingSec === null ? null : Number(payload.remainingSec || 0);
+            proConversionState.elapsedSec = Number(payload.elapsedSec || 0);
+            proConversionState.status = proConversionState.paused ? 'paused' : 'running';
+            updateProProcessLiveUI();
             return;
         }
         if (payload.type === 'state') {
             if (payload.state === 'running') {
                 proConversionState.running = true;
                 proConversionState.paused = false;
+                proConversionState.status = 'running';
             }
             if (payload.state === 'paused') {
                 proConversionState.paused = true;
+                proConversionState.status = 'paused';
             }
             if (payload.state === 'cancelled') {
                 proConversionState.running = false;
                 proConversionState.paused = false;
+                proConversionState.status = 'cancelled';
+                if (document.getElementById('proProcessPage')) {
+                    renderProProcessPage();
+                }
             }
             return;
         }
         if (payload.type === 'success') {
             proConversionState.running = false;
             proConversionState.paused = false;
-            const progressBar = document.getElementById('proProgressBar');
-            const progressText = document.getElementById('proProgressText');
-            if (progressBar) progressBar.style.width = '100%';
-            if (progressText) progressText.textContent = '100%';
+            proConversionState.status = 'success';
+            proConversionState.percent = 100;
+            proConversionState.remainingSec = 0;
+            proConversionState.outputPath = payload.outputPath || proConversionState.outputPath;
             showToast('专业转换完成', 'success', 4000);
-            if (payload.outputPath) {
-                const outputEl = document.getElementById('proOutputPath');
-                if (outputEl) outputEl.value = payload.outputPath;
+            if (document.getElementById('proProcessPage')) {
+                renderProProcessPage();
             }
             return;
         }
         if (payload.type === 'error') {
             proConversionState.running = false;
             proConversionState.paused = false;
+            proConversionState.status = 'error';
+            proConversionState.errorMessage = payload.message || '专业转换失败';
+            if (document.getElementById('proProcessPage')) {
+                renderProProcessPage();
+            }
             showToast(payload.message || '专业转换失败', 'error', 5000);
         }
     });
@@ -1014,7 +1024,7 @@ document.addEventListener('DOMContentLoaded', () => {
                     <h3><i class="bi bi-info-circle"></i> 关于</h3>
                     <div class="about-info">
                         <div class="about-logo">🚀</div>
-                        <div class="version-tag">Version 1.3.0</div>
+                        <div class="version-tag">Version 1.4.1</div>
                         <div class="setting-label">TransCrypt Pro</div>
                         <div class="setting-description" style="margin-top:12px;">
                             一个基于 Electron 和 FFmpeg 的轻量级开源转换工具。<br>
@@ -3717,35 +3727,8 @@ document.addEventListener('DOMContentLoaded', () => {
                 background-size:12px;
                 padding-right:32px;
             }
-            .pro-assist-panel{
-                border:1px solid var(--border-color);
-                border-radius:12px;
-                background:linear-gradient(135deg,var(--input-bg),var(--surface-color));
-                padding:12px 14px;
-                box-shadow:var(--shadow-sm);
-            }
-            .pro-strip-metadata-item{
-                display:flex;
-                align-items:center;
-                justify-content:space-between;
-                gap:12px;
-                color:var(--text-main);
-                font-size:14px;
-                font-weight:600;
-            }
-            .pro-strip-metadata-item .pro-hint{
-                display:block;
-                margin-top:4px;
-                font-size:12px;
-                color:var(--text-secondary);
-                font-weight:400;
-            }
-            .pro-strip-metadata-item input[type="checkbox"]{
-                width:18px;
-                height:18px;
-                accent-color:var(--primary-color);
-                cursor:pointer;
-            }
+            .pro-advanced-toggle{display:flex;gap:14px;flex-wrap:wrap}
+            .pro-advanced-toggle label{display:flex;gap:8px;align-items:center;margin:0}
             .pro-actions{display:flex;gap:10px;flex-wrap:wrap}
             .pro-actions button{margin-top:0}
             .pro-command-preview,.pro-log-view{width:100%;border:1px solid var(--border-color);border-radius:10px;background:var(--input-bg);color:var(--text-main);padding:10px;font-family:Consolas,monospace;font-size:12px}
@@ -3753,50 +3736,18 @@ document.addEventListener('DOMContentLoaded', () => {
             .pro-log-view{min-height:160px;resize:vertical}
             .pro-progress-row{display:grid;grid-template-columns:1fr auto;gap:12px;align-items:center}
             .pro-progress-meta{display:flex;gap:14px;flex-wrap:wrap;font-size:12px;color:var(--text-secondary)}
-            .pro-progress-actions{
-                margin-top:12px;
-                padding:12px;
-                border:1px dashed var(--border-color);
-                border-radius:10px;
-                background:var(--input-bg);
-                display:flex;
-                justify-content:flex-end;
-            }
-            .pro-danger-btn{
-                background:var(--error-color)!important;
-                border-color:var(--error-color)!important;
-                color:#fff!important;
-                min-width:120px;
-                font-weight:600;
-            }
-            .pro-danger-btn:hover{
-                filter:brightness(0.95);
-                transform:translateY(-1px);
-            }
             .pro-inline{display:flex;gap:10px;flex-wrap:wrap;align-items:center}
             .pro-inline .secondary-btn,.pro-inline button{margin-top:0}
             .pro-warning{color:#f59e0b;font-size:12px}
             .pro-error{color:var(--error-color);font-size:12px}
             .pro-output-row{display:grid;grid-template-columns:1fr auto;gap:10px}
+            .pro-process-logs-wrap{border:1px solid var(--border-color);border-radius:12px;padding:12px;background:var(--surface-color)}
+            .pro-process-logs-wrap h3{margin:0 0 10px 0;font-size:15px}
             .pro-hidden{display:none!important}
             @media (max-width:1080px){.pro-form-grid{grid-template-columns:1fr 1fr}.pro-section-card.is-half{grid-column:span 12}}
             @media (max-width:680px){.pro-form-grid{grid-template-columns:1fr}.pro-output-row{grid-template-columns:1fr}}
         `;
         document.head.appendChild(styleEl);
-    }
-
-    function getProPresets() {
-        try {
-            const raw = localStorage.getItem('pro_conversion_presets');
-            const parsed = raw ? JSON.parse(raw) : [];
-            return Array.isArray(parsed) ? parsed : [];
-        } catch (error) {
-            return [];
-        }
-    }
-
-    function saveProPresets(presets) {
-        localStorage.setItem('pro_conversion_presets', JSON.stringify(presets || []));
     }
 
     function pathExtLower(filePath) {
@@ -3840,6 +3791,122 @@ document.addEventListener('DOMContentLoaded', () => {
     function toInt(value, fallback = 0) {
         const n = Number(value);
         return Number.isFinite(n) ? Math.round(n) : fallback;
+    }
+
+    function formatProDuration(seconds) {
+        if (!Number.isFinite(seconds) || seconds < 0) return '--';
+        const total = Math.floor(seconds);
+        const h = Math.floor(total / 3600);
+        const m = Math.floor((total % 3600) / 60);
+        const s = total % 60;
+        if (h > 0) {
+            return `${h}:${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`;
+        }
+        return `${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`;
+    }
+
+    function getProStatusText() {
+        if (proConversionState.status === 'success') return '已完成';
+        if (proConversionState.status === 'error') return '失败';
+        if (proConversionState.status === 'cancelled') return '已取消';
+        if (proConversionState.status === 'paused') return '已暂停';
+        if (proConversionState.status === 'running') return '处理中';
+        return '等待中';
+    }
+
+    function updateProProcessLiveUI() {
+        const barEl = document.getElementById('proProcessBar');
+        const percentEl = document.getElementById('proProcessPercent');
+        const speedEl = document.getElementById('proProcessSpeed');
+        const etaEl = document.getElementById('proProcessEta');
+        const elapsedEl = document.getElementById('proProcessElapsed');
+        const statusEl = document.getElementById('proProcessStatus');
+        const logsEl = document.getElementById('proProcessLogs');
+        if (barEl) barEl.style.width = `${Math.max(0, Math.min(100, Number(proConversionState.percent || 0)))}%`;
+        if (percentEl) percentEl.textContent = `${Math.round(Number(proConversionState.percent || 0))}%`;
+        if (speedEl) speedEl.textContent = proConversionState.speed || '--';
+        if (etaEl) etaEl.textContent = formatProDuration(proConversionState.remainingSec);
+        if (elapsedEl) elapsedEl.textContent = formatProDuration(proConversionState.elapsedSec);
+        if (statusEl) statusEl.textContent = getProStatusText();
+        if (logsEl) {
+            logsEl.value = proConversionState.logs.join('\n');
+            logsEl.scrollTop = logsEl.scrollHeight;
+        }
+    }
+
+    function renderProProcessPage() {
+        ensureUnifiedRuntimeStyles();
+        const finished = ['success', 'cancelled', 'error'].includes(proConversionState.status);
+        const statusClass = proConversionState.status === 'success'
+            ? 'is-success'
+            : (proConversionState.status === 'error' ? 'is-warning' : 'is-running');
+        const summaryText = proConversionState.status === 'success'
+            ? '专业转换完成'
+            : (proConversionState.status === 'error'
+                ? (proConversionState.errorMessage || '任务失败')
+                : (proConversionState.status === 'cancelled' ? '任务已取消' : '正在根据 FFmpeg 输出更新进度'));
+        mainContent.innerHTML = `
+            <div id="proProcessPage" class="unified-progress-page ${statusClass}">
+                <div class="unified-progress-head">
+                    <div>
+                        <h1>${finished ? '专业转换结果' : '专业转换进度'}</h1>
+                        <p>${summaryText}</p>
+                    </div>
+                    <div class="unified-progress-actions">
+                        <button id="proBackToConfigBtn" class="secondary-btn"><i class="bi bi-sliders"></i> 返回参数页</button>
+                        ${!finished ? '<button id="proProcessCancelBtn" class="secondary-btn"><i class="bi bi-x-circle"></i> 取消转换</button>' : ''}
+                        <button id="proOpenOutputBtn" class="secondary-btn" ${(proConversionState.outputPath || proConversionState.sourcePath) ? '' : 'disabled'}><i class="bi bi-folder2-open"></i> 打开所在目录</button>
+                    </div>
+                </div>
+                <div class="unified-progress-overview">
+                    <div class="status-pill"><i class="bi bi-file-earmark"></i> 文件 ${extractFileName(proConversionState.sourcePath) || '--'}</div>
+                    <div class="status-pill"><i class="bi bi-graph-up-arrow"></i> 进度 <strong id="proProcessPercent">0%</strong></div>
+                    <div class="status-pill"><i class="bi bi-speedometer2"></i> 速度 <strong id="proProcessSpeed">--</strong></div>
+                    <div class="status-pill"><i class="bi bi-hourglass-split"></i> 剩余 <strong id="proProcessEta">--</strong></div>
+                    <div class="status-pill"><i class="bi bi-stopwatch"></i> 已耗时 <strong id="proProcessElapsed">--</strong></div>
+                    <div class="status-pill"><i class="bi bi-info-circle"></i> 状态 <strong id="proProcessStatus">等待中</strong></div>
+                </div>
+                <div class="progress-bar-bg unified-progress-bar">
+                    <div class="progress-bar-fill" id="proProcessBar" style="width:0%"></div>
+                </div>
+                <div class="pro-process-logs-wrap">
+                    <h3>转换日志</h3>
+                    <textarea id="proProcessLogs" class="pro-log-view" readonly></textarea>
+                </div>
+            </div>
+        `;
+        const cancelBtn = document.getElementById('proProcessCancelBtn');
+        if (cancelBtn) {
+            cancelBtn.onclick = async () => {
+                if (!proConversionState.taskId || !proConversionState.running) return;
+                const res = await window.electronAPI.proCancelConversion(proConversionState.taskId);
+                if (res.success) {
+                    proConversionState.running = false;
+                    proConversionState.paused = false;
+                    proConversionState.status = 'cancelled';
+                    renderProProcessPage();
+                    showToast('已请求取消任务', 'info');
+                } else {
+                    showToast(res.message || '取消失败', 'error');
+                }
+            };
+        }
+        const openBtn = document.getElementById('proOpenOutputBtn');
+        if (openBtn) {
+            openBtn.onclick = () => {
+                const targetPath = proConversionState.outputPath || proConversionState.sourcePath;
+                if (targetPath) {
+                    window.electronAPI.openPath(pathDir(targetPath));
+                }
+            };
+        }
+        const backBtn = document.getElementById('proBackToConfigBtn');
+        if (backBtn) {
+            backBtn.onclick = () => {
+                loadProfessionalConversionView();
+            };
+        }
+        updateProProcessLiveUI();
     }
 
     function buildDefaultProConfig(probe) {
@@ -4032,9 +4099,15 @@ document.addEventListener('DOMContentLoaded', () => {
             taskId: '',
             running: false,
             paused: false,
+            status: 'idle',
             logs: [],
             command: '',
-            lastProgress: null
+            lastProgress: null,
+            percent: 0,
+            speed: '',
+            remainingSec: null,
+            elapsedSec: 0,
+            errorMessage: ''
         };
         proControlPolicyUpdater = null;
         mainContent.innerHTML = `
@@ -4094,14 +4167,11 @@ document.addEventListener('DOMContentLoaded', () => {
                         </section>
                         <section class="pro-section-card is-half">
                             <h3 class="pro-section-title"><i class="bi bi-sliders2"></i>辅助功能</h3>
-                            <div class="pro-assist-panel">
-                                <label class="pro-strip-metadata-item">
-                                    <span>
-                                        删除元数据
-                                        <span class="pro-hint">转换时自动移除来源设备与隐私信息</span>
-                                    </span>
-                                    <input id="pro_stripMetadata" type="checkbox" checked>
-                                </label>
+                            <div class="pro-advanced-toggle">
+                                <label><input id="pro_stripMetadata" type="checkbox" checked> 删除元数据</label>
+                            </div>
+                            <div class="pro-inline" style="margin-top:12px;">
+                                <button id="proResetConfigBtn" class="secondary-btn"><i class="bi bi-arrow-counterclockwise"></i> 重置参数</button>
                             </div>
                         </section>
                         <section class="pro-section-card">
@@ -4113,13 +4183,7 @@ document.addEventListener('DOMContentLoaded', () => {
                             </div>
                             <div class="pro-actions">
                                 <button id="proStartBtn"><i class="bi bi-play-circle" style="margin-right:6px;"></i>开始转换</button>
-                            </div>
-                            <div class="pro-progress-actions">
-                                <button id="proCancelBtn" class="secondary-btn pro-danger-btn"><i class="bi bi-x-circle"></i> 取消</button>
-                            </div>
-                            <div class="form-group" style="margin-top:12px;">
-                                <label>转换日志</label>
-                                <textarea id="proConversionLogs" class="pro-log-view" readonly></textarea>
+                                <span style="font-size:12px;color:var(--text-secondary);">开始后将进入过程页面展示详细进度</span>
                             </div>
                         </section>
                     </div>
@@ -4285,8 +4349,6 @@ document.addEventListener('DOMContentLoaded', () => {
             const outputEl = document.getElementById('proOutputPath');
             if (outputEl) outputEl.value = proConversionState.outputPath;
             proConversionState.logs = [];
-            const logsEl = document.getElementById('proConversionLogs');
-            if (logsEl) logsEl.value = '';
             await refreshProCommandPreview();
         };
 
@@ -4341,6 +4403,17 @@ document.addEventListener('DOMContentLoaded', () => {
             refreshProCommandPreview();
         });
 
+        document.getElementById('proResetConfigBtn').addEventListener('click', () => {
+            if (!proConversionState.originalConfig) return;
+            applyProConfigToForm(proConversionState.originalConfig);
+            enforceProControlPolicy();
+            const outputEl = document.getElementById('proOutputPath');
+            if (outputEl) {
+                outputEl.value = buildRecommendedOutputPath(proConversionState.sourcePath, proConversionState.originalConfig.container);
+            }
+            refreshProCommandPreview();
+        });
+
         document.getElementById('proStartBtn').addEventListener('click', async () => {
             if (!proConversionState.sourcePath) {
                 showToast('请先选择文件', 'error');
@@ -4364,13 +4437,14 @@ document.addEventListener('DOMContentLoaded', () => {
             proConversionState.taskId = `pro-${Date.now()}`;
             proConversionState.running = true;
             proConversionState.paused = false;
+            proConversionState.status = 'running';
             proConversionState.logs = [];
-            const logsEl = document.getElementById('proConversionLogs');
-            if (logsEl) logsEl.value = '';
-            const progressBar = document.getElementById('proProgressBar');
-            const progressText = document.getElementById('proProgressText');
-            if (progressBar) progressBar.style.width = '0%';
-            if (progressText) progressText.textContent = '0%';
+            proConversionState.percent = 0;
+            proConversionState.speed = '';
+            proConversionState.remainingSec = null;
+            proConversionState.elapsedSec = 0;
+            proConversionState.errorMessage = '';
+            proConversionState.outputPath = outputPath;
             const config = collectProConfigFromForm();
             const startResult = await window.electronAPI.proStartConversion({
                 taskId: proConversionState.taskId,
@@ -4382,22 +4456,12 @@ document.addEventListener('DOMContentLoaded', () => {
             });
             if (!startResult.success) {
                 proConversionState.running = false;
+                proConversionState.status = 'error';
                 showToast(startResult.message || '启动转换失败', 'error', 5000);
                 return;
             }
+            renderProProcessPage();
             showToast('专业转换任务已启动', 'success', 2500);
-        });
-
-        document.getElementById('proCancelBtn').addEventListener('click', async () => {
-            if (!proConversionState.taskId || !proConversionState.running) return;
-            const res = await window.electronAPI.proCancelConversion(proConversionState.taskId);
-            if (res.success) {
-                proConversionState.running = false;
-                proConversionState.paused = false;
-                showToast('已请求取消任务', 'info');
-            } else {
-                showToast(res.message || '取消失败', 'error');
-            }
         });
 
         bindParamChangeEvents();
