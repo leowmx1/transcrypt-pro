@@ -3717,8 +3717,35 @@ document.addEventListener('DOMContentLoaded', () => {
                 background-size:12px;
                 padding-right:32px;
             }
-            .pro-advanced-toggle{display:flex;gap:14px;flex-wrap:wrap}
-            .pro-advanced-toggle label{display:flex;gap:8px;align-items:center;margin:0}
+            .pro-assist-panel{
+                border:1px solid var(--border-color);
+                border-radius:12px;
+                background:linear-gradient(135deg,var(--input-bg),var(--surface-color));
+                padding:12px 14px;
+                box-shadow:var(--shadow-sm);
+            }
+            .pro-strip-metadata-item{
+                display:flex;
+                align-items:center;
+                justify-content:space-between;
+                gap:12px;
+                color:var(--text-main);
+                font-size:14px;
+                font-weight:600;
+            }
+            .pro-strip-metadata-item .pro-hint{
+                display:block;
+                margin-top:4px;
+                font-size:12px;
+                color:var(--text-secondary);
+                font-weight:400;
+            }
+            .pro-strip-metadata-item input[type="checkbox"]{
+                width:18px;
+                height:18px;
+                accent-color:var(--primary-color);
+                cursor:pointer;
+            }
             .pro-actions{display:flex;gap:10px;flex-wrap:wrap}
             .pro-actions button{margin-top:0}
             .pro-command-preview,.pro-log-view{width:100%;border:1px solid var(--border-color);border-radius:10px;background:var(--input-bg);color:var(--text-main);padding:10px;font-family:Consolas,monospace;font-size:12px}
@@ -3726,6 +3753,26 @@ document.addEventListener('DOMContentLoaded', () => {
             .pro-log-view{min-height:160px;resize:vertical}
             .pro-progress-row{display:grid;grid-template-columns:1fr auto;gap:12px;align-items:center}
             .pro-progress-meta{display:flex;gap:14px;flex-wrap:wrap;font-size:12px;color:var(--text-secondary)}
+            .pro-progress-actions{
+                margin-top:12px;
+                padding:12px;
+                border:1px dashed var(--border-color);
+                border-radius:10px;
+                background:var(--input-bg);
+                display:flex;
+                justify-content:flex-end;
+            }
+            .pro-danger-btn{
+                background:var(--error-color)!important;
+                border-color:var(--error-color)!important;
+                color:#fff!important;
+                min-width:120px;
+                font-weight:600;
+            }
+            .pro-danger-btn:hover{
+                filter:brightness(0.95);
+                transform:translateY(-1px);
+            }
             .pro-inline{display:flex;gap:10px;flex-wrap:wrap;align-items:center}
             .pro-inline .secondary-btn,.pro-inline button{margin-top:0}
             .pro-warning{color:#f59e0b;font-size:12px}
@@ -3840,18 +3887,21 @@ document.addEventListener('DOMContentLoaded', () => {
         const stripEl = document.getElementById('pro_stripMetadata');
         const hwAccel = read('hwAccel').toLowerCase();
         const qsvMode = hwAccel === 'qsv';
+        const fpsRaw = read('fps');
+        const fpsNumber = Number(fpsRaw);
+        const qsvFps = Number.isFinite(fpsNumber) && fpsNumber > 0 ? String(Math.round(fpsNumber)) : '';
         return {
             container: read('container'),
             hwAccel,
             videoCodec: qsvMode ? 'h264_qsv' : read('videoCodec'),
             videoBitrate: read('videoBitrate'),
             resolution: qsvMode ? '' : read('resolution'),
-            fps: read('fps'),
+            fps: qsvMode ? qsvFps : fpsRaw,
             crf: qsvMode ? '' : read('crf'),
-            preset: read('preset'),
-            profile: read('profile'),
+            preset: qsvMode ? '' : read('preset'),
+            profile: qsvMode ? '' : read('profile'),
             gop: read('gop'),
-            pixelFormat: qsvMode ? 'nv12' : read('pixelFormat'),
+            pixelFormat: qsvMode ? '' : read('pixelFormat'),
             audioCodec: read('audioCodec'),
             sampleRate: read('sampleRate'),
             channels: read('channels'),
@@ -3899,16 +3949,12 @@ document.addEventListener('DOMContentLoaded', () => {
         const outputPath = outputEl ? outputEl.value.trim() : '';
         const config = collectProConfigFromForm();
         proConversionState.currentConfig = config;
-        const resumeCheckbox = document.getElementById('proResumeCheckpoint');
-        const resumeFromMs = resumeCheckbox && resumeCheckbox.checked && proConversionState.sourceProbe && proConversionState.sourceProbe.checkpoint
-            ? toInt(proConversionState.sourceProbe.checkpoint.timeMs, 0)
-            : 0;
         const preview = await window.electronAPI.proBuildCommand({
             sourcePath: proConversionState.sourcePath,
             outputPath,
             config,
             sourceProbe: proConversionState.sourceProbe,
-            resumeFromMs
+            resumeFromMs: 0
         });
         if (!preview.success) {
             commandEl.value = '';
@@ -4048,15 +4094,14 @@ document.addEventListener('DOMContentLoaded', () => {
                         </section>
                         <section class="pro-section-card is-half">
                             <h3 class="pro-section-title"><i class="bi bi-sliders2"></i>辅助功能</h3>
-                            <div class="pro-advanced-toggle">
-                                <label><input id="pro_stripMetadata" type="checkbox" checked> 清理元数据</label>
-                                <label><input id="proResumeCheckpoint" type="checkbox"> 启用断点续传</label>
-                            </div>
-                            <div class="pro-inline" style="margin-top:12px;">
-                                <select id="proPresetSelect" class="pro-control"><option value="">选择参数预设</option></select>
-                                <button id="proApplyPresetBtn" class="secondary-btn"><i class="bi bi-folder-check"></i> 应用预设</button>
-                                <button id="proSavePresetBtn" class="secondary-btn"><i class="bi bi-bookmark-plus"></i> 保存预设</button>
-                                <button id="proResetConfigBtn" class="secondary-btn"><i class="bi bi-arrow-counterclockwise"></i> 重置参数</button>
+                            <div class="pro-assist-panel">
+                                <label class="pro-strip-metadata-item">
+                                    <span>
+                                        删除元数据
+                                        <span class="pro-hint">转换时自动移除来源设备与隐私信息</span>
+                                    </span>
+                                    <input id="pro_stripMetadata" type="checkbox" checked>
+                                </label>
                             </div>
                         </section>
                         <section class="pro-section-card">
@@ -4068,17 +4113,9 @@ document.addEventListener('DOMContentLoaded', () => {
                             </div>
                             <div class="pro-actions">
                                 <button id="proStartBtn"><i class="bi bi-play-circle" style="margin-right:6px;"></i>开始转换</button>
-                                <button id="proPauseBtn" class="secondary-btn"><i class="bi bi-pause-circle"></i> 暂停</button>
-                                <button id="proResumeBtn" class="secondary-btn"><i class="bi bi-play-circle"></i> 继续</button>
-                                <button id="proCancelBtn" class="secondary-btn"><i class="bi bi-x-circle"></i> 取消</button>
                             </div>
-                            <div class="pro-progress-row" style="margin-top:10px;">
-                                <div class="progress-bar-bg"><div id="proProgressBar" class="progress-bar-fill"></div></div>
-                                <span id="proProgressText">0%</span>
-                            </div>
-                            <div class="pro-progress-meta" style="margin-top:8px;">
-                                <span>速度: <strong id="proProgressSpeed">--</strong></span>
-                                <span>剩余: <strong id="proProgressEta">--</strong></span>
+                            <div class="pro-progress-actions">
+                                <button id="proCancelBtn" class="secondary-btn pro-danger-btn"><i class="bi bi-x-circle"></i> 取消</button>
                             </div>
                             <div class="form-group" style="margin-top:12px;">
                                 <label>转换日志</label>
@@ -4155,14 +4192,18 @@ document.addEventListener('DOMContentLoaded', () => {
 
             if (qsvVideoMode) {
                 videoCodecEl.value = 'h264_qsv';
-                setSelectAllowedValues(pixelFormatEl, new Set(['nv12']), false);
-                pixelFormatEl.value = 'nv12';
+                setSelectAllowedValues(pixelFormatEl, new Set(['', 'yuv420p', 'nv12', 'yuv422p', 'yuv444p']), true);
+                pixelFormatEl.value = '';
                 crfEl.value = '';
                 crfEl.disabled = true;
                 if (crfGroupEl) crfGroupEl.classList.add('pro-hidden');
                 if (resolutionEl) {
                     resolutionEl.value = '';
                 }
+                const presetEl = document.getElementById('pro_preset');
+                const profileEl = document.getElementById('pro_profile');
+                if (presetEl) presetEl.value = '';
+                if (profileEl) profileEl.value = '';
             } else {
                 setSelectAllowedValues(pixelFormatEl, new Set(['', 'yuv420p', 'nv12', 'yuv422p', 'yuv444p']), true);
                 crfEl.disabled = videoDisabled;
@@ -4175,18 +4216,13 @@ document.addEventListener('DOMContentLoaded', () => {
             }
             setSelectAllowedValues(sampleRateEl, allowedSampleRates, true);
 
-            setControlsDisabled(['pro_videoBitrate', 'pro_fps', 'pro_crf', 'pro_preset', 'pro_profile', 'pro_gop', 'pro_pixelFormat'], videoDisabled);
+            setControlsDisabled(['pro_videoBitrate', 'pro_fps', 'pro_crf', 'pro_gop'], videoDisabled);
+            setControlsDisabled(['pro_pixelFormat'], videoDisabled || qsvVideoMode);
+            setControlsDisabled(['pro_preset', 'pro_profile'], videoDisabled || qsvVideoMode);
             setControlsDisabled(['pro_resolution'], videoDisabled || qsvVideoMode);
             setControlsDisabled(['pro_sampleRate', 'pro_channels', 'pro_audioBitrate'], audioDisabled);
         };
         proControlPolicyUpdater = enforceProControlPolicy;
-
-        const updatePresetOptions = () => {
-            const presetSelect = document.getElementById('proPresetSelect');
-            if (!presetSelect) return;
-            const presets = getProPresets();
-            presetSelect.innerHTML = `<option value="">选择参数预设</option>${presets.map((item, index) => `<option value="${index}">${item.name}</option>`).join('')}`;
-        };
 
         const bindParamChangeEvents = () => {
             const panel = document.getElementById('proParameterPanel');
@@ -4243,13 +4279,11 @@ document.addEventListener('DOMContentLoaded', () => {
                 const pixelFormatEl = document.getElementById('pro_pixelFormat');
                 if (hwEl) hwEl.value = 'qsv';
                 if (videoCodecEl) videoCodecEl.value = 'h264_qsv';
-                if (pixelFormatEl) pixelFormatEl.value = 'nv12';
+                if (pixelFormatEl) pixelFormatEl.value = '';
             }
             enforceProControlPolicy();
             const outputEl = document.getElementById('proOutputPath');
             if (outputEl) outputEl.value = proConversionState.outputPath;
-            const resumeCheckbox = document.getElementById('proResumeCheckpoint');
-            if (resumeCheckbox) resumeCheckbox.checked = !!(probeResult.checkpoint && probeResult.checkpoint.timeMs > 0);
             proConversionState.logs = [];
             const logsEl = document.getElementById('proConversionLogs');
             if (logsEl) logsEl.value = '';
@@ -4307,46 +4341,6 @@ document.addEventListener('DOMContentLoaded', () => {
             refreshProCommandPreview();
         });
 
-        document.getElementById('proResetConfigBtn').addEventListener('click', () => {
-            if (!proConversionState.originalConfig) return;
-            applyProConfigToForm(proConversionState.originalConfig);
-            enforceProControlPolicy();
-            const outputEl = document.getElementById('proOutputPath');
-            if (outputEl) {
-                outputEl.value = buildRecommendedOutputPath(proConversionState.sourcePath, proConversionState.originalConfig.container);
-            }
-            refreshProCommandPreview();
-        });
-
-        document.getElementById('proSavePresetBtn').addEventListener('click', () => {
-            if (!proConversionState.sourcePath) {
-                showToast('请先上传文件再保存预设', 'info');
-                return;
-            }
-            const name = window.prompt('请输入预设名称');
-            if (!name || !name.trim()) return;
-            const presets = getProPresets();
-            presets.push({
-                name: name.trim(),
-                config: collectProConfigFromForm()
-            });
-            saveProPresets(presets.slice(-30));
-            updatePresetOptions();
-            showToast('预设已保存', 'success');
-        });
-
-        document.getElementById('proApplyPresetBtn').addEventListener('click', () => {
-            const selectEl = document.getElementById('proPresetSelect');
-            if (!selectEl || !selectEl.value) return;
-            const presets = getProPresets();
-            const selected = presets[toInt(selectEl.value, -1)];
-            if (!selected || !selected.config) return;
-            applyProConfigToForm(selected.config);
-            enforceProControlPolicy();
-            refreshProCommandPreview();
-            showToast(`已应用预设: ${selected.name}`, 'success');
-        });
-
         document.getElementById('proStartBtn').addEventListener('click', async () => {
             if (!proConversionState.sourcePath) {
                 showToast('请先选择文件', 'error');
@@ -4378,14 +4372,13 @@ document.addEventListener('DOMContentLoaded', () => {
             if (progressBar) progressBar.style.width = '0%';
             if (progressText) progressText.textContent = '0%';
             const config = collectProConfigFromForm();
-            const resumeCheckbox = document.getElementById('proResumeCheckpoint');
             const startResult = await window.electronAPI.proStartConversion({
                 taskId: proConversionState.taskId,
                 sourcePath: proConversionState.sourcePath,
                 outputPath,
                 config,
                 sourceProbe: proConversionState.sourceProbe,
-                resumeFromCheckpoint: !!(resumeCheckbox && resumeCheckbox.checked)
+                resumeFromCheckpoint: false
             });
             if (!startResult.success) {
                 proConversionState.running = false;
@@ -4395,28 +4388,6 @@ document.addEventListener('DOMContentLoaded', () => {
             showToast('专业转换任务已启动', 'success', 2500);
         });
 
-        document.getElementById('proPauseBtn').addEventListener('click', async () => {
-            if (!proConversionState.taskId || !proConversionState.running) return;
-            const res = await window.electronAPI.proPauseConversion(proConversionState.taskId);
-            if (res.success) {
-                proConversionState.paused = true;
-                showToast('任务已暂停', 'info');
-            } else {
-                showToast(res.message || '暂停失败', 'error');
-            }
-        });
-
-        document.getElementById('proResumeBtn').addEventListener('click', async () => {
-            if (!proConversionState.taskId || !proConversionState.running) return;
-            const res = await window.electronAPI.proResumeConversion(proConversionState.taskId);
-            if (res.success) {
-                proConversionState.paused = false;
-                showToast('任务已继续', 'info');
-            } else {
-                showToast(res.message || '继续失败', 'error');
-            }
-        });
-
         document.getElementById('proCancelBtn').addEventListener('click', async () => {
             if (!proConversionState.taskId || !proConversionState.running) return;
             const res = await window.electronAPI.proCancelConversion(proConversionState.taskId);
@@ -4424,18 +4395,12 @@ document.addEventListener('DOMContentLoaded', () => {
                 proConversionState.running = false;
                 proConversionState.paused = false;
                 showToast('已请求取消任务', 'info');
-                const checkpoint = await window.electronAPI.proGetCheckpoint(proConversionState.sourcePath);
-                if (checkpoint && checkpoint.success && checkpoint.checkpoint && checkpoint.checkpoint.timeMs > 0) {
-                    const resumeCheckbox = document.getElementById('proResumeCheckpoint');
-                    if (resumeCheckbox) resumeCheckbox.checked = true;
-                }
             } else {
                 showToast(res.message || '取消失败', 'error');
             }
         });
 
         bindParamChangeEvents();
-        updatePresetOptions();
         enforceProControlPolicy();
     }
 

@@ -2213,7 +2213,7 @@ function buildProfessionalConversionArgs({
     const hasVideoOutput = hasVideo && !isAudioContainer && videoCodec !== 'none';
     const isQsvMode = hwAccel === 'qsv' && hasVideoOutput;
     const effectiveVideoCodec = isQsvMode ? 'h264_qsv' : videoCodec;
-    const effectivePixelFormat = isQsvMode ? 'nv12' : pixelFormat;
+    const effectivePixelFormat = isQsvMode ? '' : pixelFormat;
 
     if (videoCodec === 'copy' && (cfg.videoBitrate || cfg.crf || cfg.preset || cfg.profile || cfg.gop || cfg.pixelFormat || cfg.fps || cfg.resolution)) {
         errors.push('视频编码器为 copy 时，不能同时设置码率、CRF、预设、Profile、GOP、像素格式、帧率或分辨率');
@@ -2230,8 +2230,20 @@ function buildProfessionalConversionArgs({
     if (isQsvMode && cfg.crf !== '' && cfg.crf !== undefined && cfg.crf !== null) {
         warnings.push('QSV 模式下 CRF 已自动禁用');
     }
-    if (isQsvMode && pixelFormat && pixelFormat !== 'nv12') {
-        warnings.push('QSV 模式将强制使用 nv12 像素格式');
+    if (isQsvMode && cfg.preset) {
+        warnings.push('QSV 模式下 preset 已自动禁用');
+    }
+    if (isQsvMode && cfg.profile) {
+        warnings.push('QSV 模式下 profile 已自动禁用');
+    }
+    if (isQsvMode && pixelFormat) {
+        warnings.push('QSV 模式下像素格式设置已自动禁用');
+    }
+    if (isQsvMode && cfg.fps) {
+        const fpsNum = Number(cfg.fps);
+        if (Number.isFinite(fpsNum) && fpsNum > 0 && !Number.isInteger(fpsNum)) {
+            warnings.push('QSV 模式下 FPS 将强制取整');
+        }
     }
     if (cfg.resolution) {
         warnings.push('已禁用自动 scale 滤镜，分辨率参数将被忽略');
@@ -2286,10 +2298,19 @@ function buildProfessionalConversionArgs({
             args.push('-c:v', effectiveVideoCodec);
         }
         if (cfg.videoBitrate) args.push('-b:v', String(cfg.videoBitrate));
-        if (cfg.fps) args.push('-r', String(cfg.fps));
+        if (cfg.fps) {
+            if (isQsvMode) {
+                const fpsInt = Math.round(Number(cfg.fps));
+                if (Number.isFinite(fpsInt) && fpsInt > 0) {
+                    args.push('-r', String(fpsInt));
+                }
+            } else {
+                args.push('-r', String(cfg.fps));
+            }
+        }
         if (!isQsvMode && cfg.crf !== '' && cfg.crf !== undefined && cfg.crf !== null) args.push('-crf', String(cfg.crf));
-        if (cfg.preset) args.push('-preset', String(cfg.preset));
-        if (cfg.profile) args.push('-profile:v', String(cfg.profile));
+        if (!isQsvMode && cfg.preset) args.push('-preset', String(cfg.preset));
+        if (!isQsvMode && cfg.profile) args.push('-profile:v', String(cfg.profile));
         if (cfg.gop) args.push('-g', String(cfg.gop));
         if (effectivePixelFormat) args.push('-pix_fmt', String(effectivePixelFormat));
     } else {
